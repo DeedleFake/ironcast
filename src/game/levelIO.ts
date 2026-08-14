@@ -1,4 +1,5 @@
 import type {
+  ColorGrid,
   GameLevel,
   LevelEntity,
   LevelMark,
@@ -6,7 +7,14 @@ import type {
   PlayerSpawn,
   WallGrid,
 } from "./types";
-import { LEVEL_VERSION, cloneLevel } from "./types";
+import {
+  DEFAULT_CEIL,
+  DEFAULT_FLOOR,
+  LEVEL_VERSION,
+  cloneLevel,
+  colorGrid,
+  parseHexColor,
+} from "./types";
 
 export type ParseResult =
   | { ok: true; level: GameLevel }
@@ -26,6 +34,23 @@ function validateWalls(
     if (!Array.isArray(row) || row.length !== width) return false;
     for (const cell of row) {
       if (!isNum(cell) || cell < 0 || cell > 6 || !Number.isInteger(cell)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+function validateColors(
+  grid: unknown,
+  width: number,
+  height: number,
+): grid is ColorGrid {
+  if (!Array.isArray(grid) || grid.length !== height) return false;
+  for (const row of grid) {
+    if (!Array.isArray(row) || row.length !== width) return false;
+    for (const cell of row) {
+      if (!isNum(cell) || cell < 0 || cell > 0xffffff || !Number.isInteger(cell)) {
         return false;
       }
     }
@@ -139,21 +164,32 @@ export function parseLevel(input: string | unknown): ParseResult {
   if (!validateMarks(o.marks)) {
     return { ok: false, error: "This map’s marks are damaged" };
   }
+  const seedFloor =
+    typeof o.floorColor === "string" ? parseHexColor(o.floorColor) : DEFAULT_FLOOR;
+  const seedCeil =
+    typeof o.ceilingColor === "string"
+      ? parseHexColor(o.ceilingColor)
+      : DEFAULT_CEIL;
+  const floors = validateColors(o.floors, width, height)
+    ? (o.floors as ColorGrid).map((r) => [...r])
+    : colorGrid(width, height, seedFloor);
+  const ceils = validateColors(o.ceils, width, height)
+    ? (o.ceils as ColorGrid).map((r) => [...r])
+    : colorGrid(width, height, seedCeil);
   const level: GameLevel = {
     version: LEVEL_VERSION,
     name: o.name.trim().slice(0, 64),
     width,
     height,
     walls: (o.walls as WallGrid).map((r) => [...r]),
+    floors,
+    ceils,
     spawn: {
       x: (o.spawn as PlayerSpawn).x,
       y: (o.spawn as PlayerSpawn).y,
       angle: (o.spawn as PlayerSpawn).angle,
     },
     entities: (o.entities as LevelEntity[]).map((e) => ({ ...e })),
-    floorColor: typeof o.floorColor === "string" ? o.floorColor : "#2a2420",
-    ceilingColor:
-      typeof o.ceilingColor === "string" ? o.ceilingColor : "#12141a",
     fogColor: typeof o.fogColor === "string" ? o.fogColor : "#0a0a0c",
     author: typeof o.author === "string" ? o.author.slice(0, 64) : "",
     script: typeof o.script === "string" ? o.script : "",

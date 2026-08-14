@@ -7,10 +7,14 @@ import type {
   LevelEntity,
 } from "./types";
 import {
+  DEFAULT_CEIL,
+  DEFAULT_FLOOR,
   WALL_NAMES,
   WALL_TEXTURE_COUNT,
   cloneLevel,
+  hexFromColor,
   makeEmptyLevel,
+  parseHexColor,
   uid,
 } from "./types";
 import { upsertCustomLevel } from "./levels";
@@ -27,6 +31,7 @@ import {
   Heart,
   MapPin,
   Minus,
+  MousePointer2,
   PaintBucket,
   Paintbrush,
   Pipette,
@@ -89,6 +94,7 @@ const META_TOOLS: {
   hint: string;
   icon: React.ReactNode;
 }[] = [
+  { id: "select", label: "Select", hint: "V", icon: <MousePointer2 className="size-4" /> },
   { id: "erase", label: "Erase", hint: "E", icon: <Eraser className="size-4" /> },
   { id: "eyedrop", label: "Pick", hint: "I", icon: <Pipette className="size-4" /> },
 ];
@@ -111,6 +117,143 @@ const AREAS: { id: "zone" | "mark"; label: string; icon: React.ReactNode }[] = [
   { id: "mark", label: "Mark", icon: <Tag className="size-4" /> },
 ];
 
+type SelItem =
+  | { k: "cell"; x: number; y: number }
+  | { k: "entity"; id: string }
+  | { k: "mark"; x: number; y: number }
+  | { k: "zone"; i: number }
+  | { k: "spawn" };
+
+function selKey(s: SelItem): string {
+  switch (s.k) {
+    case "cell":
+      return `c:${s.x},${s.y}`;
+    case "entity":
+      return `e:${s.id}`;
+    case "mark":
+      return `m:${s.x},${s.y}`;
+    case "zone":
+      return `z:${s.i}`;
+    case "spawn":
+      return "spawn";
+  }
+}
+
+function mergeSel(prev: SelItem[], next: SelItem[], add: boolean): SelItem[] {
+  if (!add) {
+    const seen = new Set<string>();
+    const out: SelItem[] = [];
+    for (const s of next) {
+      const k = selKey(s);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(s);
+    }
+    return out;
+  }
+  const map = new Map(prev.map((s) => [selKey(s), s] as const));
+  for (const s of next) {
+    const k = selKey(s);
+    if (map.has(k)) map.delete(k);
+    else map.set(k, s);
+  }
+  return [...map.values()];
+}
+
+function hitAt(level: GameLevel, x: number, y: number): SelItem {
+  const ent = level.entities.find(
+    (e) => Math.floor(e.x) === x && Math.floor(e.y) === y,
+  );
+  if (ent) return { k: "entity", id: ent.id };
+  const mark = (level.marks ?? []).find((m) => m.x === x && m.y === y);
+  if (mark) return { k: "mark", x, y };
+  if (Math.floor(level.spawn.x) === x && Math.floor(level.spawn.y) === y) {
+    return { k: "spawn" };
+  }
+  return { k: "cell", x, y };
+}
+
+function itemsInBox(level: GameLevel, d: Drag): SelItem[] {
+  const x0 = Math.min(d.x0, d.x1);
+  const x1 = Math.max(d.x0, d.x1);
+  const y0 = Math.min(d.y0, d.y1);
+  const y1 = Math.max(d.y0, d.y1);
+  const out: SelItem[] = [];
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (x < 0 || y < 0 || x >= level.width || y >= level.height) continue;
+      out.push({ k: "cell", x, y });
+    }
+  }
+  for (const e of level.entities) {
+    const x = Math.floor(e.x);
+    const y = Math.floor(e.y);
+    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) out.push({ k: "entity", id: e.id });
+  }
+  for (const m of level.marks ?? []) {
+    if (m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1) {
+      out.push({ k: "mark", x: m.x, y: m.y });
+    }
+  }
+  (level.zones ?? []).forEach((z, i) => {
+    if (z.x >= x0 && z.y >= y0 && z.x + z.w - 1 <= x1 && z.y + z.h - 1 <= y1) {
+      out.push({ k: "zone", i });
+    }
+  });
+  const sx = Math.floor(level.spawn.x);
+  const sy = Math.floor(level.spawn.y);
+  if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) out.push({ k: "spawn" });
+  return out;
+}
+
+function pruneSel(level: GameLevel, sel: SelItem[]): SelItem[] {
+  return sel.filter((s) => {
+    if (s.k === "entity") return level.entities.some((e) => e.id === s.id);
+    if (s.k === "mark") {
+      return (level.marks ?? []).some((m) => m.x === s.x && m.y === s.y);
+    }
+    if (s.k === "zone") return Boolean((level.zones ?? [])[s.i]);
+    if (s.k === "cell") {
+      return s.x >= 0 && s.y >= 0 && s.x < level.width && s.y < level.height;
+    }
+    return true;
+  });
+}
+
+type SelOpt = "texture" | "floor" | "variant" | "name" | "dest" | "turn";
+
+function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
+  if (s.k === "cell") {
+    const wall = level.walls[s.y]?.[s.x] ?? 0;
+    return wall === 0
+      ? new Set<SelOpt>(["texture", "floor"])
+      : new Set<SelOpt>(["texture"]);
+  }
+  if (s.k === "entity") {
+    const e = level.entities.find((x) => x.id === s.id);
+    if (!e) return new Set();
+    if (e.type === "enemy") return new Set<SelOpt>(["variant", "name"]);
+    if (e.type === "teleport") return new Set<SelOpt>(["name", "dest"]);
+    return new Set<SelOpt>(["name"]);
+  }
+  if (s.k === "mark" || s.k === "zone") return new Set<SelOpt>(["name"]);
+  return new Set<SelOpt>(["turn"]);
+}
+
+function sharedOpts(level: GameLevel, sel: SelItem[]): Set<SelOpt> {
+  if (!sel.length) return new Set();
+  let acc = optsForItem(level, sel[0]!);
+  for (const s of sel.slice(1)) {
+    const next = optsForItem(level, s);
+    acc = new Set([...acc].filter((o) => next.has(o)));
+  }
+  if (sel.length > 1) {
+    acc.delete("name");
+    acc.delete("dest");
+  }
+  return acc;
+}
+
 function isZoneBrush(b: Brush) {
   return b.kind === "thing" && b.thing === "zone";
 }
@@ -126,6 +269,7 @@ const TOOL_KEY: Record<string, EditorTool> = {
   KeyB: "rectFill",
   KeyL: "line",
   KeyI: "eyedrop",
+  KeyV: "select",
 };
 
 export function EditorView({ initial, onExit, onPlay }: Props) {
@@ -134,14 +278,18 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   );
   const [tool, setTool] = useState<EditorTool>("paint");
   const [brush, setBrush] = useState<Brush>({ kind: "wall", tex: 1 });
+  const [wallTex, setWallTex] = useState(1);
   const [thingName, setThingName] = useState("");
   const [thingDest, setThingDest] = useState("");
   const [variant, setVariant] = useState<EnemyVariant>("grunt");
+  const [emptyFloor, setEmptyFloor] = useState(DEFAULT_FLOOR);
+  const [emptyCeil, setEmptyCeil] = useState(DEFAULT_CEIL);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [cellSize, setCellSize] = useState(22);
   const [status, setStatus] = useState("");
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [selection, setSelection] = useState<SelItem[]>([]);
   const [clearArmed, setClearArmed] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
@@ -158,6 +306,10 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   destRef.current = thingDest;
   const variantRef = useRef(variant);
   variantRef.current = variant;
+  const floorRef = useRef(emptyFloor);
+  floorRef.current = emptyFloor;
+  const ceilRef = useRef(emptyCeil);
+  ceilRef.current = emptyCeil;
   const pastRef = useRef<GameLevel[]>([]);
   const futureRef = useRef<GameLevel[]>([]);
   const strokeBaseRef = useRef<GameLevel | null>(null);
@@ -234,6 +386,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         setDrag(null);
         dragRef.current = null;
         strokeBaseRef.current = null;
+        setSelection([]);
         return;
       }
       const mod = e.ctrlKey || e.metaKey;
@@ -303,6 +456,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         name: nameRef.current,
         dest: destRef.current,
         variant: variantRef.current,
+        floor: floorRef.current,
+        ceil: ceilRef.current,
       };
       for (const c of cells) applyBrushTo(next, c.x, c.y, b, erase, extra);
       return next;
@@ -318,6 +473,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         name: nameRef.current,
         dest: destRef.current,
         variant: variantRef.current,
+        floor: floorRef.current,
+        ceil: ceilRef.current,
       };
       for (const c of cells) applyBrushTo(next, c.x, c.y, b, erase, extra);
       commitEdit(next);
@@ -353,7 +510,13 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     }
     const tex = L.walls[y]![x] ?? 0;
     setBrush({ kind: "wall", tex });
-    setStatus(`Picked ${WALL_NAMES[tex] ?? "wall"}`);
+    if (tex === 0) {
+      setEmptyFloor(L.floors[y]?.[x] ?? DEFAULT_FLOOR);
+      setEmptyCeil(L.ceils[y]?.[x] ?? DEFAULT_CEIL);
+    } else {
+      setWallTex(tex);
+    }
+    setStatus(`Picked ${tex === 0 ? "Empty" : (WALL_NAMES[tex] ?? "wall")}`);
   }, []);
 
   const cellFromEvent = (e: React.MouseEvent | React.PointerEvent) => {
@@ -377,6 +540,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
 
   const previewCells = useMemo(() => {
     if (!drag) return [];
+    if (tool === "select") return rectCells(drag, false);
     const zonePaint =
       tool !== "erase" && tool !== "eyedrop" && isZoneBrush(brush);
     if (zonePaint) return rectCells(drag, true);
@@ -418,12 +582,64 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
 
   const brushLabel =
     brush.kind === "wall"
-      ? (WALL_NAMES[brush.tex] ?? "Wall")
+      ? brush.tex === 0
+        ? "Empty"
+        : "Wall"
       : [...THINGS, ...AREAS].find((t) => t.id === brush.thing)?.label ?? "Thing";
   const toolLabel = ALL_TOOLS.find((t) => t.id === tool)?.label ?? tool;
   const nameKind =
     brush.kind === "thing" && brush.thing !== "spawn" ? brush.thing : null;
   const namePlaceholder = nameKind ? autoName(level, nameKind) : "name";
+  const showBrushInspector =
+    tool !== "select" &&
+    (brush.kind === "thing" || brush.kind === "wall");
+  const liveSel = pruneSel(level, selection);
+  const can = sharedOpts(level, liveSel);
+  const selCells = liveSel.filter((s) => s.k === "cell");
+  const selEnts = liveSel
+    .filter((s): s is { k: "entity"; id: string } => s.k === "entity")
+    .map((s) => level.entities.find((e) => e.id === s.id))
+    .filter((e): e is LevelEntity => Boolean(e));
+  const selEnemies = selEnts.filter((e) => e.type === "enemy");
+  const selEmpties = selCells.filter(
+    (s) => (level.walls[s.y]?.[s.x] ?? 0) === 0,
+  );
+  const hasSpawn = liveSel.some((s) => s.k === "spawn");
+  const singleEnt = liveSel.length === 1 && liveSel[0]!.k === "entity" ? selEnts[0] : null;
+  const singleMark =
+    liveSel.length === 1 && liveSel[0]!.k === "mark"
+      ? (level.marks ?? []).find(
+          (m) => m.x === (liveSel[0] as { x: number; y: number }).x &&
+            m.y === (liveSel[0] as { x: number; y: number }).y,
+        )
+      : null;
+  const singleZone =
+    liveSel.length === 1 && liveSel[0]!.k === "zone"
+      ? (level.zones ?? [])[(liveSel[0] as { i: number }).i]
+      : null;
+
+  const editSel = (mut: (next: GameLevel) => void) => {
+    const next = cloneLevel(levelRef.current);
+    mut(next);
+    commitEdit(next);
+  };
+
+  const selTitle =
+    liveSel.length === 0
+      ? "Selected"
+      : liveSel.length === 1
+        ? singleEnt
+          ? singleEnt.name || singleEnt.type
+          : singleMark
+            ? singleMark.name
+            : singleZone
+              ? singleZone.name
+              : hasSpawn
+                ? "Spawn"
+                : selCells[0] && (level.walls[selCells[0].y]?.[selCells[0].x] ?? 0) === 0
+                  ? "Empty"
+                  : "Wall"
+        : `${liveSel.length} selected`;
 
   return (
     <div className="flex h-[calc(100dvh-var(--grok-banner-h,0px))] flex-col bg-bg">
@@ -507,291 +723,552 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-        <aside className="flex max-h-[42vh] shrink-0 flex-col gap-3 overflow-y-auto border-b border-border bg-surface-2 p-2 md:max-h-none md:w-52 md:border-r md:border-b-0">
-          <Section title="Draw">
-            <div className="grid grid-cols-3 gap-1">
-              {DRAW_TOOLS.map((t) => (
-                <ToolCell
-                  key={t.id}
-                  tool={t}
-                  active={tool === t.id}
-                  onClick={() => setTool(t.id)}
-                />
-              ))}
-            </div>
-          </Section>
+        <aside className="flex max-h-[42vh] shrink-0 flex-col overflow-y-auto border-b border-border bg-surface-2 md:max-h-none md:w-52 md:border-r md:border-b-0">
+          <div className="flex flex-col gap-3 p-2">
+            <p className="text-[10px] tracking-widest text-dim uppercase">
+              Palette
+            </p>
 
-          <Section title="Erase & pick">
-            <div className="grid grid-cols-2 gap-1">
-              {META_TOOLS.map((t) => (
+            <Section title="Draw">
+              <div className="grid grid-cols-3 gap-1">
+                {DRAW_TOOLS.map((t) => (
+                  <ToolCell
+                    key={t.id}
+                    tool={t}
+                    active={tool === t.id}
+                    onClick={() => setTool(t.id)}
+                  />
+                ))}
+              </div>
+            </Section>
+
+            <Section title="Erase & pick">
+              <div className="grid grid-cols-3 gap-1">
+                {META_TOOLS.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    title={`${t.label} (${t.hint})`}
+                    onClick={() => setTool(t.id)}
+                    className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-2 text-[11px] transition-colors ${
+                      tool === t.id
+                        ? "bg-primary/20 text-primary"
+                        : "text-muted hover:bg-surface hover:text-fg"
+                    }`}
+                  >
+                    {t.icon}
+                    <span>{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </Section>
+
+            <Section title="Walls">
+              <div className="grid grid-cols-2 gap-1">
                 <button
-                  key={t.id}
                   type="button"
-                  title={`${t.label} (${t.hint})`}
-                  onClick={() => setTool(t.id)}
-                  className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-2 text-[11px] transition-colors ${
-                    tool === t.id
-                      ? "bg-primary/20 text-primary"
-                      : "text-muted hover:bg-surface hover:text-fg"
+                  onClick={() => setBrush({ kind: "wall", tex: 0 })}
+                  className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                    brush.kind === "wall" && brush.tex === 0
+                      ? "border-primary bg-primary/15 text-fg"
+                      : "border-transparent text-muted hover:border-border hover:text-fg"
                   }`}
                 >
-                  {t.icon}
-                  <span>{t.label}</span>
+                  <span
+                    className="size-4 shrink-0 rounded-sm border border-black/40"
+                    style={{ background: hexFromColor(emptyFloor) }}
+                  />
+                  <span className="truncate">Empty</span>
                 </button>
-              ))}
-            </div>
-          </Section>
-
-          <Section title="Walls">
-            <div className="grid gap-0.5">
-              {Array.from({ length: WALL_TEXTURE_COUNT + 1 }, (_, i) => {
-                const active = brush.kind === "wall" && brush.tex === i;
-                return (
-                  <button
-                    key={i}
-                    type="button"
-                    onClick={() => setBrush({ kind: "wall", tex: i })}
-                    className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                      active
-                        ? "border-primary bg-primary/15 text-fg"
-                        : "border-transparent text-muted hover:border-border hover:text-fg"
-                    }`}
-                  >
-                    <span
-                      className="size-4 shrink-0 rounded-sm border border-black/40"
-                      style={{ background: TEX_COLORS[i] }}
-                    />
-                    <span className="truncate">{WALL_NAMES[i]}</span>
-                    <span className="ml-auto font-mono text-[10px] text-dim">
-                      {i}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </Section>
-
-          <Section title="Things">
-            <div className="grid grid-cols-2 gap-1">
-              {THINGS.map((t) => {
-                const active = brush.kind === "thing" && brush.thing === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setBrush({ kind: "thing", thing: t.id })}
-                    className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                      active
-                        ? "border-primary bg-primary/15 text-fg"
-                        : "border-transparent text-muted hover:border-border hover:text-fg"
-                    }`}
-                  >
-                    {t.icon}
-                    <span className="truncate">{t.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </Section>
-
-          <Section title="Areas">
-            <div className="grid grid-cols-2 gap-1">
-              {AREAS.map((t) => {
-                const active = brush.kind === "thing" && brush.thing === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setBrush({ kind: "thing", thing: t.id })}
-                    className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                      active
-                        ? "border-primary bg-primary/15 text-fg"
-                        : "border-transparent text-muted hover:border-border hover:text-fg"
-                    }`}
-                  >
-                    {t.icon}
-                    <span className="truncate">{t.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {(level.zones ?? []).length > 0 ? (
-              <div className="space-y-0.5">
-                {(level.zones ?? []).map((z, i) => (
-                  <button
-                    key={`${z.name}-${i}`}
-                    type="button"
-                    onClick={() => {
-                      const next = cloneLevel(level);
-                      next.zones = (next.zones ?? []).filter((_, j) => j !== i);
-                      commitEdit(next);
-                    }}
-                    className="flex w-full items-center justify-between rounded px-1 py-0.5 font-mono text-[10px] text-dim hover:bg-surface hover:text-primary"
-                    title="Remove zone"
-                  >
-                    <span>{z.name}</span>
-                    <span>
-                      {z.w}×{z.h}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            {(level.marks ?? []).length > 0 ? (
-              <div className="space-y-0.5">
-                {(level.marks ?? []).map((m) => (
-                  <button
-                    key={`${m.name}-${m.x}-${m.y}`}
-                    type="button"
-                    onClick={() => {
-                      const next = cloneLevel(level);
-                      next.marks = (next.marks ?? []).filter(
-                        (x) => !(x.x === m.x && x.y === m.y),
-                      );
-                      commitEdit(next);
-                    }}
-                    className="flex w-full items-center justify-between rounded px-1 py-0.5 font-mono text-[10px] text-dim hover:bg-surface hover:text-primary"
-                    title="Remove mark"
-                  >
-                    <span>{m.name}</span>
-                    <span>
-                      {m.x},{m.y}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </Section>
-
-          {brush.kind === "thing" ? (
-            <Section title={brushLabel}>
-              {brush.thing === "spawn" ? (
                 <button
                   type="button"
-                  onClick={rotateSpawn}
-                  className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-[11px] text-muted hover:bg-surface hover:text-fg"
-                  title="Rotate spawn facing"
+                  onClick={() => setBrush({ kind: "wall", tex: wallTex })}
+                  className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                    brush.kind === "wall" && brush.tex > 0
+                      ? "border-primary bg-primary/15 text-fg"
+                      : "border-transparent text-muted hover:border-border hover:text-fg"
+                  }`}
                 >
-                  <RotateCcw className="size-3.5" />
-                  Turn spawn
+                  <span
+                    className="size-4 shrink-0 rounded-sm border border-black/40"
+                    style={{ background: TEX_COLORS[wallTex] ?? TEX_COLORS[1] }}
+                  />
+                  <span className="truncate">Wall</span>
                 </button>
-              ) : null}
-              {nameKind ? (
-                <>
-                  <label className="block text-[11px] text-muted">
-                    Name
-                    <input
-                      value={thingName}
-                      onChange={(e) => setThingName(e.target.value)}
-                      placeholder={namePlaceholder}
-                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
-                    />
-                  </label>
-                  <p className="text-[10px] leading-snug text-dim">
-                    Leave blank to use {namePlaceholder}.
-                  </p>
-                </>
-              ) : null}
-              {brush.thing === "enemy" ? (
-                <div className="flex gap-1">
-                  {(["grunt", "bruiser"] as const).map((v) => (
+              </div>
+            </Section>
+
+            <Section title="Things">
+              <div className="grid grid-cols-2 gap-1">
+                {THINGS.map((t) => {
+                  const active = brush.kind === "thing" && brush.thing === t.id;
+                  return (
                     <button
-                      key={v}
+                      key={t.id}
                       type="button"
-                      onClick={() => setVariant(v)}
-                      className={`flex-1 rounded-md border px-2 py-1 text-[11px] capitalize ${
-                        variant === v
+                      onClick={() => setBrush({ kind: "thing", thing: t.id })}
+                      className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                        active
                           ? "border-primary bg-primary/15 text-fg"
-                          : "border-border text-muted"
+                          : "border-transparent text-muted hover:border-border hover:text-fg"
                       }`}
                     >
-                      {v}
+                      {t.icon}
+                      <span className="truncate">{t.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Section>
+
+            <Section title="Areas">
+              <div className="grid grid-cols-2 gap-1">
+                {AREAS.map((t) => {
+                  const active = brush.kind === "thing" && brush.thing === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setBrush({ kind: "thing", thing: t.id })}
+                      className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                        active
+                          ? "border-primary bg-primary/15 text-fg"
+                          : "border-transparent text-muted hover:border-border hover:text-fg"
+                      }`}
+                    >
+                      {t.icon}
+                      <span className="truncate">{t.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {(level.zones ?? []).length > 0 ? (
+                <div className="space-y-0.5">
+                  {(level.zones ?? []).map((z, i) => (
+                    <button
+                      key={`${z.name}-${i}`}
+                      type="button"
+                      onClick={() => {
+                        const next = cloneLevel(level);
+                        next.zones = (next.zones ?? []).filter((_, j) => j !== i);
+                        commitEdit(next);
+                      }}
+                      className="flex w-full items-center justify-between rounded px-1 py-0.5 font-mono text-[10px] text-dim hover:bg-surface hover:text-primary"
+                      title="Remove zone"
+                    >
+                      <span>{z.name}</span>
+                      <span>
+                        {z.w}×{z.h}
+                      </span>
                     </button>
                   ))}
                 </div>
               ) : null}
-              {brush.thing === "teleport" ? (
-                <label className="block text-[11px] text-muted">
-                  Destination
-                  <input
-                    value={thingDest}
-                    onChange={(e) => setThingDest(e.target.value)}
-                    placeholder="name of the other pad"
-                    className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
-                  />
-                </label>
-              ) : null}
-              {isZoneBrush(brush) ? (
-                <p className="text-[10px] leading-snug text-dim">
-                  Drag a box to name a region.
-                </p>
-              ) : null}
-              {isMarkBrush(brush) ? (
-                <p className="text-[10px] leading-snug text-dim">
-                  Click one cell to name it.
-                </p>
+              {(level.marks ?? []).length > 0 ? (
+                <div className="space-y-0.5">
+                  {(level.marks ?? []).map((m) => (
+                    <button
+                      key={`${m.name}-${m.x}-${m.y}`}
+                      type="button"
+                      onClick={() => {
+                        const next = cloneLevel(level);
+                        next.marks = (next.marks ?? []).filter(
+                          (x) => !(x.x === m.x && x.y === m.y),
+                        );
+                        commitEdit(next);
+                      }}
+                      className="flex w-full items-center justify-between rounded px-1 py-0.5 font-mono text-[10px] text-dim hover:bg-surface hover:text-primary"
+                      title="Remove mark"
+                    >
+                      <span>{m.name}</span>
+                      <span>
+                        {m.x},{m.y}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               ) : null}
             </Section>
+          </div>
+
+          {tool === "select" ? (
+            <div className="flex flex-col gap-3 border-t border-border p-2">
+              <p className="text-[10px] tracking-widest text-dim uppercase">
+                Selected
+              </p>
+              <Section title={selTitle}>
+                {liveSel.length === 0 ? (
+                  <p className="text-[10px] leading-snug text-dim">
+                    Click a thing, or drag a box. Hold Shift to add or remove.
+                  </p>
+                ) : null}
+                {liveSel.length > 0 && can.size === 0 ? (
+                  <p className="text-[10px] leading-snug text-dim">
+                    No shared options for this mix.
+                  </p>
+                ) : null}
+                {can.has("name") ? (
+                  <label className="block text-[11px] text-muted">
+                    Name
+                    <input
+                      value={
+                        singleEnt?.name ??
+                        singleMark?.name ??
+                        singleZone?.name ??
+                        ""
+                      }
+                      onChange={(e) => {
+                        const name = e.target.value;
+                        const item = liveSel[0]!;
+                        editSel((L) => {
+                          if (item.k === "entity") {
+                            const ent = L.entities.find((x) => x.id === item.id);
+                            if (ent) ent.name = name;
+                          } else if (item.k === "mark") {
+                            const m = (L.marks ?? []).find(
+                              (x) => x.x === item.x && x.y === item.y,
+                            );
+                            if (m) m.name = name;
+                          } else if (item.k === "zone") {
+                            const z = (L.zones ?? [])[item.i];
+                            if (z) z.name = name;
+                          }
+                        });
+                      }}
+                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                    />
+                  </label>
+                ) : null}
+                {can.has("dest") && singleEnt?.type === "teleport" ? (
+                  <label className="block text-[11px] text-muted">
+                    Destination
+                    <input
+                      value={singleEnt.dest ?? ""}
+                      onChange={(e) => {
+                        const dest = e.target.value;
+                        const id = singleEnt.id;
+                        editSel((L) => {
+                          const ent = L.entities.find((x) => x.id === id);
+                          if (ent) ent.dest = dest;
+                        });
+                      }}
+                      placeholder="name of the other pad"
+                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                    />
+                  </label>
+                ) : null}
+                {can.has("texture") ? (
+                  <div className="grid gap-0.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        editSel((L) => {
+                          for (const s of selCells) L.walls[s.y]![s.x] = 0;
+                        })
+                      }
+                      className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                        selCells.every(
+                          (s) => (level.walls[s.y]?.[s.x] ?? 0) === 0,
+                        )
+                          ? "border-primary bg-primary/15 text-fg"
+                          : "border-transparent text-muted hover:border-border hover:text-fg"
+                      }`}
+                    >
+                      <span
+                        className="size-4 shrink-0 rounded-sm border border-black/40"
+                        style={{ background: hexFromColor(DEFAULT_FLOOR) }}
+                      />
+                      <span className="truncate">Empty</span>
+                    </button>
+                    {Array.from({ length: WALL_TEXTURE_COUNT }, (_, i) => {
+                      const tex = i + 1;
+                      const allThis =
+                        selCells.length > 0 &&
+                        selCells.every(
+                          (s) => (level.walls[s.y]?.[s.x] ?? 0) === tex,
+                        );
+                      return (
+                        <button
+                          key={tex}
+                          type="button"
+                          onClick={() =>
+                            editSel((L) => {
+                              for (const s of selCells) {
+                                L.walls[s.y]![s.x] = tex;
+                              }
+                            })
+                          }
+                          className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                            allThis
+                              ? "border-primary bg-primary/15 text-fg"
+                              : "border-transparent text-muted hover:border-border hover:text-fg"
+                          }`}
+                        >
+                          <span
+                            className="size-4 shrink-0 rounded-sm border border-black/40"
+                            style={{ background: TEX_COLORS[tex] }}
+                          />
+                          <span className="truncate">{WALL_NAMES[tex]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {can.has("floor") ? (
+                  <>
+                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                      Floor
+                      <input
+                        type="color"
+                        value={hexFromColor(
+                          level.floors[selEmpties[0]!.y]?.[selEmpties[0]!.x] ??
+                            DEFAULT_FLOOR,
+                        )}
+                        onChange={(e) => {
+                          const n = parseHexColor(e.target.value);
+                          editSel((L) => {
+                            for (const s of selEmpties) {
+                              if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
+                                L.floors[s.y]![s.x] = n;
+                              }
+                            }
+                          });
+                        }}
+                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                      Ceiling
+                      <input
+                        type="color"
+                        value={hexFromColor(
+                          level.ceils[selEmpties[0]!.y]?.[selEmpties[0]!.x] ??
+                            DEFAULT_CEIL,
+                        )}
+                        onChange={(e) => {
+                          const n = parseHexColor(e.target.value);
+                          editSel((L) => {
+                            for (const s of selEmpties) {
+                              if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
+                                L.ceils[s.y]![s.x] = n;
+                              }
+                            }
+                          });
+                        }}
+                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                      />
+                    </label>
+                  </>
+                ) : null}
+                {can.has("variant") ? (
+                  <div className="flex gap-1">
+                    {(["grunt", "bruiser"] as const).map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() =>
+                          editSel((L) => {
+                            for (const e of L.entities) {
+                              if (
+                                e.type === "enemy" &&
+                                selEnemies.some((s) => s.id === e.id)
+                              ) {
+                                e.variant = v;
+                              }
+                            }
+                          })
+                        }
+                        className={`flex-1 rounded-md border px-2 py-1 text-[11px] capitalize ${
+                          selEnemies.every((e) => (e.variant ?? "grunt") === v)
+                            ? "border-primary bg-primary/15 text-fg"
+                            : "border-border text-muted"
+                        }`}
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {can.has("turn") ? (
+                  <button
+                    type="button"
+                    onClick={rotateSpawn}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-[11px] text-muted hover:bg-surface hover:text-fg"
+                    title="Rotate spawn facing"
+                  >
+                    <RotateCcw className="size-3.5" />
+                    Turn spawn
+                  </button>
+                ) : null}
+              </Section>
+            </div>
           ) : null}
 
-          <Section title="Look">
-            <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-              Floor
-              <input
-                type="color"
-                value={toHex(level.floorColor)}
-                onFocus={beginStroke}
-                onChange={(e) =>
-                  setLevel((l) => ({ ...l, floorColor: e.target.value }))
-                }
-                onBlur={endStroke}
-                className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-              />
-            </label>
-            <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-              Ceiling
-              <input
-                type="color"
-                value={toHex(level.ceilingColor)}
-                onFocus={beginStroke}
-                onChange={(e) =>
-                  setLevel((l) => ({ ...l, ceilingColor: e.target.value }))
-                }
-                onBlur={endStroke}
-                className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-              />
-            </label>
-          </Section>
-
-          {clearArmed ? (
-            <div className="mt-auto space-y-1.5 rounded-md border border-primary/30 bg-primary/5 p-2">
-              <p className="text-[11px] text-primary">Erase everything?</p>
-              <div className="flex gap-1">
-                <button
-                  type="button"
-                  onClick={() => setClearArmed(false)}
-                  className="flex-1 rounded-md border border-border py-1.5 text-[11px] text-muted hover:bg-surface hover:text-fg"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={clearMap}
-                  className="flex-1 rounded-md border border-primary/50 bg-primary/15 py-1.5 text-[11px] font-semibold text-primary hover:bg-primary/25"
-                >
-                  Clear
-                </button>
-              </div>
+          {showBrushInspector ? (
+            <div className="flex flex-col gap-3 border-t border-border p-2">
+              <p className="text-[10px] tracking-widest text-dim uppercase">
+                Selected
+              </p>
+              <Section title={brushLabel}>
+                {brush.kind === "wall" && brush.tex === 0 ? (
+                  <>
+                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                      Floor
+                      <input
+                        type="color"
+                        value={hexFromColor(emptyFloor)}
+                        onChange={(e) =>
+                          setEmptyFloor(parseHexColor(e.target.value))
+                        }
+                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                      Ceiling
+                      <input
+                        type="color"
+                        value={hexFromColor(emptyCeil)}
+                        onChange={(e) =>
+                          setEmptyCeil(parseHexColor(e.target.value))
+                        }
+                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                      />
+                    </label>
+                    <p className="text-[10px] leading-snug text-dim">
+                      Paint empty cells to apply these colors.
+                    </p>
+                  </>
+                ) : null}
+                {brush.kind === "wall" && brush.tex > 0 ? (
+                  <div className="grid gap-0.5">
+                    {Array.from({ length: WALL_TEXTURE_COUNT }, (_, i) => {
+                      const tex = i + 1;
+                      const active = brush.tex === tex;
+                      return (
+                        <button
+                          key={tex}
+                          type="button"
+                          onClick={() => {
+                            setWallTex(tex);
+                            setBrush({ kind: "wall", tex });
+                          }}
+                          className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                            active
+                              ? "border-primary bg-primary/15 text-fg"
+                              : "border-transparent text-muted hover:border-border hover:text-fg"
+                          }`}
+                        >
+                          <span
+                            className="size-4 shrink-0 rounded-sm border border-black/40"
+                            style={{ background: TEX_COLORS[tex] }}
+                          />
+                          <span className="truncate">{WALL_NAMES[tex]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {brush.kind === "thing" && brush.thing === "spawn" ? (
+                  <button
+                    type="button"
+                    onClick={rotateSpawn}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-[11px] text-muted hover:bg-surface hover:text-fg"
+                    title="Rotate spawn facing"
+                  >
+                    <RotateCcw className="size-3.5" />
+                    Turn spawn
+                  </button>
+                ) : null}
+                {nameKind ? (
+                  <>
+                    <label className="block text-[11px] text-muted">
+                      Name
+                      <input
+                        value={thingName}
+                        onChange={(e) => setThingName(e.target.value)}
+                        placeholder={namePlaceholder}
+                        className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                      />
+                    </label>
+                    <p className="text-[10px] leading-snug text-dim">
+                      Leave blank to use {namePlaceholder}.
+                    </p>
+                  </>
+                ) : null}
+                {brush.kind === "thing" && brush.thing === "enemy" ? (
+                  <div className="flex gap-1">
+                    {(["grunt", "bruiser"] as const).map((v) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setVariant(v)}
+                        className={`flex-1 rounded-md border px-2 py-1 text-[11px] capitalize ${
+                          variant === v
+                            ? "border-primary bg-primary/15 text-fg"
+                            : "border-border text-muted"
+                        }`}
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {brush.kind === "thing" && brush.thing === "teleport" ? (
+                  <label className="block text-[11px] text-muted">
+                    Destination
+                    <input
+                      value={thingDest}
+                      onChange={(e) => setThingDest(e.target.value)}
+                      placeholder="name of the other pad"
+                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                    />
+                  </label>
+                ) : null}
+                {isZoneBrush(brush) ? (
+                  <p className="text-[10px] leading-snug text-dim">
+                    Drag a box to name a region.
+                  </p>
+                ) : null}
+                {isMarkBrush(brush) ? (
+                  <p className="text-[10px] leading-snug text-dim">
+                    Click one cell to name it.
+                  </p>
+                ) : null}
+              </Section>
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setClearArmed(true)}
-              className="mt-auto rounded-md border border-border py-1.5 text-[11px] text-muted hover:border-primary/40 hover:text-primary"
-            >
-              Clear map
-            </button>
-          )}
+          ) : null}
+
+          <div className="mt-auto p-2">
+            {clearArmed ? (
+              <div className="space-y-1.5 rounded-md border border-primary/30 bg-primary/5 p-2">
+                <p className="text-[11px] text-primary">Erase everything?</p>
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setClearArmed(false)}
+                    className="flex-1 rounded-md border border-border py-1.5 text-[11px] text-muted hover:bg-surface hover:text-fg"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={clearMap}
+                    className="flex-1 rounded-md border border-primary/50 bg-primary/15 py-1.5 text-[11px] font-semibold text-primary hover:bg-primary/25"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setClearArmed(true)}
+                className="w-full rounded-md border border-border py-1.5 text-[11px] text-muted hover:border-primary/40 hover:text-primary"
+              >
+                Clear map
+              </button>
+            )}
+          </div>
         </aside>
 
         <div
@@ -810,6 +1287,12 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               const { x, y } = cellFromEvent(e);
               const t = toolRef.current;
               const b = brushRef.current;
+              if (t === "select") {
+                const d = { x0: x, y0: y, x1: x, y1: y };
+                dragRef.current = d;
+                setDrag(d);
+                return;
+              }
               if (t === "eyedrop" || e.altKey) {
                 pickFrom(x, y);
                 return;
@@ -852,6 +1335,14 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 pickFrom(x, y);
                 return;
               }
+              if (t === "select") {
+                const cur = dragRef.current;
+                if (!cur) return;
+                const next = { ...cur, x1: x, y1: y };
+                dragRef.current = next;
+                setDrag(next);
+                return;
+              }
               if (isZoneBrush(b) && t !== "erase") {
                 const cur = dragRef.current;
                 if (!cur) return;
@@ -872,12 +1363,21 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               if (t === "fill") return;
               applyCells([{ x, y }], t === "erase");
             }}
-            onPointerUp={() => {
+            onPointerUp={(e) => {
               const t = toolRef.current;
               const b = brushRef.current;
               const d = dragRef.current;
               dragRef.current = null;
               setDrag(null);
+              if (t === "select" && d) {
+                const L = levelRef.current;
+                const same = d.x0 === d.x1 && d.y0 === d.y1;
+                const items = same
+                  ? [hitAt(L, d.x0, d.y0)]
+                  : itemsInBox(L, d);
+                setSelection((prev) => mergeSel(prev, items, e.shiftKey));
+                return;
+              }
               if (d && isZoneBrush(b) && t !== "erase" && t !== "eyedrop") {
                 const x0 = Math.min(d.x0, d.x1);
                 const y0 = Math.min(d.y0, d.y1);
@@ -917,6 +1417,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 name: nameRef.current,
                 dest: destRef.current,
                 variant: variantRef.current,
+                floor: floorRef.current,
+                ceil: ceilRef.current,
               });
               commitEdit(next);
             }}
@@ -936,9 +1438,23 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                       top: y * cellSize,
                       width: cellSize,
                       height: cellSize,
-                      background: TEX_COLORS[cell] ?? "#333",
+                      background:
+                        cell === 0
+                          ? hexFromColor(level.floors[y]?.[x] ?? DEFAULT_FLOOR)
+                          : (TEX_COLORS[cell] ?? "#333"),
                     }}
                   >
+                    {cell === 0 ? (
+                      <span
+                        className="absolute inset-x-0 top-0"
+                        style={{
+                          height: 3,
+                          background: hexFromColor(
+                            level.ceils[y]?.[x] ?? DEFAULT_CEIL,
+                          ),
+                        }}
+                      />
+                    ) : null}
                     {isSpawn && (
                       <span
                         className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-fg"
@@ -987,6 +1503,50 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 }}
               />
             ))}
+            {liveSel.map((s) => {
+              if (s.k === "zone") {
+                const z = (level.zones ?? [])[s.i];
+                if (!z) return null;
+                return (
+                  <div
+                    key={selKey(s)}
+                    className="pointer-events-none absolute ring-2 ring-accent"
+                    style={{
+                      left: z.x * cellSize,
+                      top: z.y * cellSize,
+                      width: z.w * cellSize,
+                      height: z.h * cellSize,
+                    }}
+                  />
+                );
+              }
+              let x = 0;
+              let y = 0;
+              if (s.k === "cell" || s.k === "mark") {
+                x = s.x;
+                y = s.y;
+              } else if (s.k === "spawn") {
+                x = Math.floor(level.spawn.x);
+                y = Math.floor(level.spawn.y);
+              } else {
+                const ent = level.entities.find((e) => e.id === s.id);
+                if (!ent) return null;
+                x = Math.floor(ent.x);
+                y = Math.floor(ent.y);
+              }
+              return (
+                <div
+                  key={selKey(s)}
+                  className="pointer-events-none absolute ring-2 ring-primary"
+                  style={{
+                    left: x * cellSize,
+                    top: y * cellSize,
+                    width: cellSize,
+                    height: cellSize,
+                  }}
+                />
+              );
+            })}
             {(level.zones ?? []).map((z, i) => (
               <div
                 key={`z-${z.name}-${i}`}
@@ -998,7 +1558,18 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   height: z.h * cellSize,
                 }}
               >
-                <span className="absolute top-0 left-0 bg-accent/80 px-1 font-mono text-[9px] text-bg">
+                <span
+                  className={`absolute top-0 left-0 bg-accent/80 px-1 font-mono text-[9px] text-bg ${
+                    tool === "select" ? "pointer-events-auto cursor-pointer" : ""
+                  }`}
+                  onPointerDown={(e) => {
+                    if (tool !== "select") return;
+                    e.stopPropagation();
+                    setSelection((prev) =>
+                      mergeSel(prev, [{ k: "zone", i }], e.shiftKey),
+                    );
+                  }}
+                >
                   {z.name}
                 </span>
               </div>
@@ -1054,7 +1625,11 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-surface px-3 py-1.5 text-[11px] text-muted">
         <span>
           {level.width}×{level.height} · {level.entities.length} placed ·{" "}
-          {toolLabel} · {brushLabel}
+          {tool === "select"
+            ? liveSel.length
+              ? `Select · ${liveSel.length} selected · Shift adds`
+              : "Select · click or drag a box · Shift adds"
+            : `${toolLabel} · ${brushLabel}`}
         </span>
         <span className="min-w-0 truncate text-accent">{status}</span>
         <span className="hidden sm:inline">Right-click erases · Alt-click picks</span>
@@ -1173,10 +1748,18 @@ function applyBrushTo(
   y: number,
   brush: Brush,
   erase: boolean,
-  extra: { name: string; dest: string; variant: EnemyVariant } = {
+  extra: {
+    name: string;
+    dest: string;
+    variant: EnemyVariant;
+    floor: number;
+    ceil: number;
+  } = {
     name: "",
     dest: "",
     variant: "grunt",
+    floor: DEFAULT_FLOOR,
+    ceil: DEFAULT_CEIL,
   },
 ) {
   if (x < 0 || y < 0 || x >= level.width || y >= level.height) return;
@@ -1194,7 +1777,12 @@ function applyBrushTo(
       Math.floor(level.spawn.x) === x && Math.floor(level.spawn.y) === y;
     if (brush.tex > 0 && isSpawn) return;
     level.walls[y]![x] = brush.tex;
-    if (brush.tex > 0) removeEntityAt(level, x, y);
+    if (brush.tex === 0) {
+      level.floors[y]![x] = extra.floor;
+      level.ceils[y]![x] = extra.ceil;
+    } else {
+      removeEntityAt(level, x, y);
+    }
     return;
   }
   if (brush.thing === "mark") {
@@ -1242,6 +1830,9 @@ function cellKey(level: GameLevel, x: number, y: number): string {
     (e) => Math.floor(e.x) === x && Math.floor(e.y) === y,
   );
   if (ent) return `e:${ent.type}:${wall}`;
+  if (wall === 0) {
+    return `w:0:${level.floors[y]?.[x] ?? 0}:${level.ceils[y]?.[x] ?? 0}`;
+  }
   return `w:${wall}`;
 }
 
@@ -1319,11 +1910,7 @@ function clamp(n: number, lo: number, hi: number) {
 }
 
 function sameMap(a: GameLevel, b: GameLevel): boolean {
-  if (
-    a.floorColor !== b.floorColor ||
-    a.ceilingColor !== b.ceilingColor ||
-    a.fogColor !== b.fogColor
-  ) {
+  if (a.fogColor !== b.fogColor) {
     return false;
   }
   if (
@@ -1343,20 +1930,32 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
     const br = b.walls[y]!;
     for (let x = 0; x < a.width; x++) {
       if (ar[x] !== br[x]) return false;
+      if ((a.floors[y]?.[x] ?? 0) !== (b.floors[y]?.[x] ?? 0)) return false;
+      if ((a.ceils[y]?.[x] ?? 0) !== (b.ceils[y]?.[x] ?? 0)) return false;
     }
   }
-  const key = (e: LevelEntity) => `${e.type}:${e.x}:${e.y}`;
+  const key = (e: LevelEntity) =>
+    [
+      e.id,
+      e.type,
+      e.x,
+      e.y,
+      e.name ?? "",
+      e.dest ?? "",
+      e.variant ?? "",
+      e.locked ? 1 : 0,
+    ].join(":");
   const ae = a.entities.map(key).sort().join("|");
   const be = b.entities.map(key).sort().join("|");
-  return ae === be;
-}
-
-function toHex(c: string): string {
-  if (c.startsWith("#") && (c.length === 7 || c.length === 4)) {
-    if (c.length === 4) {
-      return `#${c[1]}${c[1]}${c[2]}${c[2]}${c[3]}${c[3]}`;
-    }
-    return c;
-  }
-  return "#2a2420";
+  if (ae !== be) return false;
+  const za = (a.zones ?? [])
+    .map((z) => `${z.name}:${z.x}:${z.y}:${z.w}:${z.h}`)
+    .join("|");
+  const zb = (b.zones ?? [])
+    .map((z) => `${z.name}:${z.x}:${z.y}:${z.w}:${z.h}`)
+    .join("|");
+  if (za !== zb) return false;
+  const ma = (a.marks ?? []).map((m) => `${m.name}:${m.x}:${m.y}`).join("|");
+  const mb = (b.marks ?? []).map((m) => `${m.name}:${m.x}:${m.y}`).join("|");
+  return ma === mb;
 }

@@ -2,8 +2,13 @@
 
 export const LEVEL_VERSION = 1 as const;
 
+export const DEFAULT_FLOOR = 0x2a2420;
+export const DEFAULT_CEIL = 0x12141a;
+
 /** Wall cell: 0 = empty floor, 1+ = wall texture index */
 export type WallGrid = number[][];
+/** Per-cell 0xRRGGBB colors */
+export type ColorGrid = number[][];
 
 export type EntityType =
   | "enemy"
@@ -59,10 +64,12 @@ export interface GameLevel {
   height: number;
   /** walls[y][x] — row-major, y down */
   walls: WallGrid;
+  /** Floor color per empty cell, 0xRRGGBB */
+  floors: ColorGrid;
+  /** Ceiling color per empty cell, 0xRRGGBB */
+  ceils: ColorGrid;
   spawn: PlayerSpawn;
   entities: LevelEntity[];
-  floorColor: string;
-  ceilingColor: string;
   fogColor: string;
   /** Optional author note */
   author?: string;
@@ -72,6 +79,7 @@ export interface GameLevel {
 }
 
 export type EditorTool =
+  | "select"
   | "paint"
   | "erase"
   | "fill"
@@ -96,10 +104,38 @@ export function emptyGrid(w: number, h: number, fill = 0): WallGrid {
   return Array.from({ length: h }, () => Array.from({ length: w }, () => fill));
 }
 
+export function colorGrid(w: number, h: number, fill: number): ColorGrid {
+  return Array.from({ length: h }, () => Array.from({ length: w }, () => fill));
+}
+
+export function parseHexColor(s: string): number {
+  const t = s.trim();
+  if (/^#[0-9a-f]{6}$/i.test(t)) return Number.parseInt(t.slice(1), 16);
+  if (/^#[0-9a-f]{3}$/i.test(t)) {
+    const r = t[1]!;
+    const g = t[2]!;
+    const b = t[3]!;
+    return Number.parseInt(r + r + g + g + b + b, 16);
+  }
+  return DEFAULT_FLOOR;
+}
+
+export function hexFromColor(n: number): string {
+  return `#${(n & 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
 export function cloneLevel(level: GameLevel): GameLevel {
+  const width = level.width;
+  const height = level.height;
   return {
     ...level,
     walls: level.walls.map((row) => [...row]),
+    floors: (level.floors ?? colorGrid(width, height, DEFAULT_FLOOR)).map((row) => [
+      ...row,
+    ]),
+    ceils: (level.ceils ?? colorGrid(width, height, DEFAULT_CEIL)).map((row) => [
+      ...row,
+    ]),
     spawn: { ...level.spawn },
     entities: level.entities.map((e) => ({ ...e })),
     zones: level.zones?.map((z) => ({ ...z })),
@@ -112,17 +148,16 @@ export function makeEmptyLevel(
   width = 24,
   height = 24,
 ): GameLevel {
-  const walls = emptyGrid(width, height, 0);
   return {
     version: LEVEL_VERSION,
     name,
     width,
     height,
-    walls,
+    walls: emptyGrid(width, height, 0),
+    floors: colorGrid(width, height, DEFAULT_FLOOR),
+    ceils: colorGrid(width, height, DEFAULT_CEIL),
     spawn: { x: 1.5, y: 1.5, angle: 0 },
     entities: [],
-    floorColor: "#2a2420",
-    ceilingColor: "#12141a",
     fogColor: "#0a0a0c",
     author: "",
     script: "",

@@ -897,21 +897,15 @@ export function renderGame(
     state.shake > 0 ? (Math.random() - 0.5) * state.shake * 8 : 0;
 
   const half = height / 2;
-  ctx.fillStyle = state.level.ceilingColor;
-  ctx.fillRect(0, 0, width, half + shakeY);
-  ctx.fillStyle = state.level.floorColor;
-  ctx.fillRect(0, half + shakeY, width, height);
-
-  const grad = ctx.createLinearGradient(0, 0, 0, height);
-  grad.addColorStop(0, "rgba(0,0,0,0.45)");
-  grad.addColorStop(0.45, "rgba(0,0,0,0)");
-  grad.addColorStop(0.55, "rgba(0,0,0,0)");
-  grad.addColorStop(1, "rgba(0,0,0,0.5)");
-  ctx.fillStyle = grad;
+  ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, width, height);
 
   const imgData = ctx.getImageData(0, 0, width, height);
   const pix = imgData.data;
+  const floors = state.level.floors;
+  const ceils = state.level.ceils;
+  const mapW = state.level.width;
+  const mapH = state.level.height;
 
   for (let col = 0; col < width; col++) {
     const cameraX = (2 * col) / width - 1;
@@ -1006,6 +1000,29 @@ export function renderGame(
       Math.min(1, 1.2 / (1 + perpWallDist * 0.22)) * (side === 1 ? 0.72 : 1);
 
     const colX = Math.min(width - 1, Math.max(0, Math.floor(col + shakeX)));
+    const horizon = half + shakeY;
+    const posZ = height * 0.5;
+
+    for (let y = 0; y < drawStart; y++) {
+      const p = horizon - y;
+      if (p < 1) continue;
+      const rowDist = posZ / p;
+      const fx = state.px + rayDirX * rowDist;
+      const fy = state.py + rayDirY * rowDist;
+      const cx = Math.floor(fx);
+      const cy = Math.floor(fy);
+      const packed =
+        cx >= 0 && cy >= 0 && cx < mapW && cy < mapH
+          ? (ceils[cy]?.[cx] ?? 0x12141a)
+          : 0x12141a;
+      const fog = Math.min(1, 1.15 / (1 + rowDist * 0.18));
+      const i = (y * width + colX) * 4;
+      pix[i] = (((packed >> 16) & 255) * fog) | 0;
+      pix[i + 1] = (((packed >> 8) & 255) * fog) | 0;
+      pix[i + 2] = ((packed & 255) * fog) | 0;
+      pix[i + 3] = 255;
+    }
+
     for (let y = drawStart; y <= drawEnd; y++) {
       const d = y * 256 - height * 128 + lineHeight * 128;
       const texY = Math.floor(((d * atlas.size) / lineHeight) / 256);
@@ -1016,6 +1033,26 @@ export function renderGame(
       pix[i] = r;
       pix[i + 1] = g;
       pix[i + 2] = b;
+      pix[i + 3] = 255;
+    }
+
+    for (let y = drawEnd + 1; y < height; y++) {
+      const p = y - horizon;
+      if (p < 1) continue;
+      const rowDist = posZ / p;
+      const fx = state.px + rayDirX * rowDist;
+      const fy = state.py + rayDirY * rowDist;
+      const cx = Math.floor(fx);
+      const cy = Math.floor(fy);
+      const packed =
+        cx >= 0 && cy >= 0 && cx < mapW && cy < mapH
+          ? (floors[cy]?.[cx] ?? 0x2a2420)
+          : 0x2a2420;
+      const fog = Math.min(1, 1.15 / (1 + rowDist * 0.18));
+      const i = (y * width + colX) * 4;
+      pix[i] = (((packed >> 16) & 255) * fog) | 0;
+      pix[i + 1] = (((packed >> 8) & 255) * fog) | 0;
+      pix[i + 2] = ((packed & 255) * fog) | 0;
       pix[i + 3] = 255;
     }
   }

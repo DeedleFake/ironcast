@@ -1,5 +1,26 @@
-import type { GameLevel } from "./types";
-import { LEVEL_VERSION, uid } from "./types";
+import type { ColorGrid, GameLevel } from "./types";
+import { LEVEL_VERSION, colorGrid, parseHexColor, uid } from "./types";
+import { parseLevel } from "./levelIO";
+
+function fillColors(w: number, h: number, hex: string): ColorGrid {
+  return colorGrid(w, h, parseHexColor(hex));
+}
+
+function paintRect(
+  g: ColorGrid,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  hex: string,
+) {
+  const n = parseHexColor(hex);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      if (g[y]?.[x] !== undefined) g[y]![x] = n;
+    }
+  }
+}
 
 function bordered(w: number, h: number, fill = 0, border = 1): number[][] {
   const g = Array.from({ length: h }, () => Array.from({ length: w }, () => fill));
@@ -119,8 +140,18 @@ export function createOutpostLevel(): GameLevel {
       { id: uid("hp"), type: "health", x: 20.5, y: 11.5 },
       { id: uid("ex"), type: "exit", x: 28.5, y: 24.5 },
     ],
-    floorColor: "#2c2620",
-    ceilingColor: "#101218",
+    floors: (() => {
+      const g = fillColors(w, h, "#2c2620");
+      paintRect(g, 3, 3, 8, 8, "#3a3024");
+      paintRect(g, 18, 8, 26, 14, "#241c18");
+      return g;
+    })(),
+    ceils: (() => {
+      const g = fillColors(w, h, "#101218");
+      paintRect(g, 3, 3, 8, 8, "#1a1410");
+      paintRect(g, 18, 8, 26, 14, "#0a0c10");
+      return g;
+    })(),
     fogColor: "#0c0c10",
     author: "Built-in",
   };
@@ -178,8 +209,16 @@ export function createReactorLevel(): GameLevel {
       { id: uid("hp"), type: "health", x: 17.5, y: 2.5 },
       { id: uid("ex"), type: "exit", x: 17.5, y: 17.5 },
     ],
-    floorColor: "#1e2228",
-    ceilingColor: "#0e1014",
+    floors: (() => {
+      const g = fillColors(w, h, "#1e2228");
+      paintRect(g, 8, 8, 11, 11, "#2a1814");
+      return g;
+    })(),
+    ceils: (() => {
+      const g = fillColors(w, h, "#0e1014");
+      paintRect(g, 8, 8, 11, 11, "#180808");
+      return g;
+    })(),
     fogColor: "#080a0c",
     author: "Built-in",
   };
@@ -197,9 +236,14 @@ export function loadCustomLevels(): GameLevel[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as GameLevel[];
+    const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((l) => l && l.version === LEVEL_VERSION && l.walls);
+    const out: GameLevel[] = [];
+    for (const item of parsed) {
+      const result = parseLevel(item);
+      if (result.ok) out.push(result.level);
+    }
+    return out;
   } catch {
     return [];
   }
