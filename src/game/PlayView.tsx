@@ -105,6 +105,7 @@ export function PlayView({
     mode: "playing" as GameState["mode"],
     message: "",
     needClick: true,
+    useHint: "",
   });
   const [showMap, setShowMap] = useState(true);
   const touchRef = useRef({
@@ -137,6 +138,7 @@ export function PlayView({
       mode: s.mode,
       message: "",
       needClick: true,
+      useHint: "",
     });
   }, [level]);
 
@@ -281,6 +283,7 @@ export function PlayView({
           prev.kills === s.kills &&
           prev.mode === s.mode &&
           prev.message === s.message &&
+          prev.useHint === s.useHint &&
           prev.needClick === (!s.pointerLocked && s.mode === "playing")
         ) {
           return prev;
@@ -294,6 +297,7 @@ export function PlayView({
           mode: s.mode,
           message: s.message,
           needClick: !s.pointerLocked && s.mode === "playing",
+          useHint: s.useHint,
         };
       });
 
@@ -542,7 +546,7 @@ export function PlayView({
                 Click to play
               </p>
               <p className="mt-2 max-w-xs text-sm text-muted">
-                WASD to move, mouse to look, click to shoot.
+                WASD to move, mouse to look, click to shoot. E uses doors.
               </p>
               <p className="mt-1 text-xs text-dim">
                 Shift sprints. Esc pauses.
@@ -598,6 +602,11 @@ export function PlayView({
         {hud.message && hud.mode === "playing" && (
           <div className="pointer-events-none absolute top-1/3 left-1/2 z-10 -translate-x-1/2 rounded bg-black/70 px-4 py-2 font-display text-sm tracking-wide text-accent uppercase">
             {hud.message}
+          </div>
+        )}
+        {hud.useHint && hud.mode === "playing" && !hud.needClick && (
+          <div className="pointer-events-none absolute bottom-8 left-1/2 z-10 -translate-x-1/2 rounded border border-border bg-surface/90 px-3 py-1 font-mono text-xs tracking-wide text-fg">
+            {hud.useHint}
           </div>
         )}
       </div>

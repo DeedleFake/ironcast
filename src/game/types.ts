@@ -5,7 +5,16 @@ export const LEVEL_VERSION = 1 as const;
 /** Wall cell: 0 = empty floor, 1+ = wall texture index */
 export type WallGrid = number[][];
 
-export type EntityType = "enemy" | "ammo" | "health" | "exit";
+export type EntityType =
+  | "enemy"
+  | "ammo"
+  | "health"
+  | "exit"
+  | "door"
+  | "teleport"
+  | "pickup";
+
+export type EnemyVariant = "grunt" | "bruiser";
 
 export interface LevelEntity {
   id: string;
@@ -13,6 +22,12 @@ export interface LevelEntity {
   /** Cell-space coordinates (center of cell = integer + 0.5) */
   x: number;
   y: number;
+  /** Script-facing name, e.g. door-armory */
+  name?: string;
+  /** Teleport destination name */
+  dest?: string;
+  variant?: EnemyVariant;
+  locked?: boolean;
 }
 
 export interface PlayerSpawn {
@@ -20,6 +35,21 @@ export interface PlayerSpawn {
   y: number;
   /** Radians; 0 faces +X (east), increases CCW */
   angle: number;
+}
+
+export interface LevelZone {
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Named cell — shoot/use/set-wall by name */
+export interface LevelMark {
+  name: string;
+  x: number;
+  y: number;
 }
 
 export interface GameLevel {
@@ -36,6 +66,9 @@ export interface GameLevel {
   fogColor: string;
   /** Optional author note */
   author?: string;
+  script?: string;
+  zones?: LevelZone[];
+  marks?: LevelMark[];
 }
 
 export type EditorTool =
@@ -69,6 +102,8 @@ export function cloneLevel(level: GameLevel): GameLevel {
     walls: level.walls.map((row) => [...row]),
     spawn: { ...level.spawn },
     entities: level.entities.map((e) => ({ ...e })),
+    zones: level.zones?.map((z) => ({ ...z })),
+    marks: level.marks?.map((m) => ({ ...m })),
   };
 }
 
@@ -90,6 +125,9 @@ export function makeEmptyLevel(
     ceilingColor: "#12141a",
     fogColor: "#0a0a0c",
     author: "",
+    script: "",
+    zones: [],
+    marks: [],
   };
 }
 

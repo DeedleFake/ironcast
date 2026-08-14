@@ -1,4 +1,11 @@
-import type { GameLevel, LevelEntity, PlayerSpawn, WallGrid } from "./types";
+import type {
+  GameLevel,
+  LevelEntity,
+  LevelMark,
+  LevelZone,
+  PlayerSpawn,
+  WallGrid,
+} from "./types";
 import { LEVEL_VERSION, cloneLevel } from "./types";
 
 export type ParseResult =
@@ -35,14 +42,57 @@ function validateSpawn(s: unknown): s is PlayerSpawn {
 function validateEntity(e: unknown): e is LevelEntity {
   if (!e || typeof e !== "object") return false;
   const o = e as Record<string, unknown>;
-  const types = ["enemy", "ammo", "health", "exit"];
-  return (
-    typeof o.id === "string" &&
-    typeof o.type === "string" &&
-    types.includes(o.type) &&
-    isNum(o.x) &&
-    isNum(o.y)
-  );
+  const types = [
+    "enemy",
+    "ammo",
+    "health",
+    "exit",
+    "door",
+    "teleport",
+    "pickup",
+  ];
+  if (
+    typeof o.id !== "string" ||
+    typeof o.type !== "string" ||
+    !types.includes(o.type) ||
+    !isNum(o.x) ||
+    !isNum(o.y)
+  ) {
+    return false;
+  }
+  if (o.name !== undefined && typeof o.name !== "string") return false;
+  if (o.dest !== undefined && typeof o.dest !== "string") return false;
+  if (o.variant !== undefined && o.variant !== "grunt" && o.variant !== "bruiser") {
+    return false;
+  }
+  if (o.locked !== undefined && typeof o.locked !== "boolean") return false;
+  return true;
+}
+
+function validateZones(v: unknown): v is LevelZone[] {
+  if (v === undefined) return true;
+  if (!Array.isArray(v)) return false;
+  return v.every((z) => {
+    if (!z || typeof z !== "object") return false;
+    const o = z as Record<string, unknown>;
+    return (
+      typeof o.name === "string" &&
+      isNum(o.x) &&
+      isNum(o.y) &&
+      isNum(o.w) &&
+      isNum(o.h)
+    );
+  });
+}
+
+function validateMarks(v: unknown): v is LevelMark[] {
+  if (v === undefined) return true;
+  if (!Array.isArray(v)) return false;
+  return v.every((m) => {
+    if (!m || typeof m !== "object") return false;
+    const o = m as Record<string, unknown>;
+    return typeof o.name === "string" && isNum(o.x) && isNum(o.y);
+  });
 }
 
 /** Parse and validate a level JSON string or object. */
@@ -83,6 +133,12 @@ export function parseLevel(input: string | unknown): ParseResult {
   if (!Array.isArray(o.entities) || !o.entities.every(validateEntity)) {
     return { ok: false, error: "This map’s objects are damaged" };
   }
+  if (!validateZones(o.zones)) {
+    return { ok: false, error: "This map’s zones are damaged" };
+  }
+  if (!validateMarks(o.marks)) {
+    return { ok: false, error: "This map’s marks are damaged" };
+  }
   const level: GameLevel = {
     version: LEVEL_VERSION,
     name: o.name.trim().slice(0, 64),
@@ -100,6 +156,9 @@ export function parseLevel(input: string | unknown): ParseResult {
       typeof o.ceilingColor === "string" ? o.ceilingColor : "#12141a",
     fogColor: typeof o.fogColor === "string" ? o.fogColor : "#0a0a0c",
     author: typeof o.author === "string" ? o.author.slice(0, 64) : "",
+    script: typeof o.script === "string" ? o.script : "",
+    zones: Array.isArray(o.zones) ? (o.zones as LevelZone[]).map((z) => ({ ...z })) : [],
+    marks: Array.isArray(o.marks) ? (o.marks as LevelMark[]).map((m) => ({ ...m })) : [],
   };
   return { ok: true, level };
 }

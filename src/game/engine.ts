@@ -3,8 +3,8 @@
  * Canvas 2D column rendering with textured walls and billboard sprites.
  */
 
-import type { GameLevel, LevelEntity } from "./types";
-import { cloneLevel } from "./types";
+import type { EnemyVariant, GameLevel, LevelEntity } from "./types";
+import { cloneLevel, uid } from "./types";
 import {
   getTextures,
   sampleSprite,
@@ -12,6 +12,19 @@ import {
   type TextureAtlas,
 } from "./textures";
 import { sfx, unlockAudio } from "./audio";
+import {
+  compileProgram,
+  evalForms,
+  fireHandlers,
+  makeEnv,
+  nil,
+  num,
+  str,
+  type Env,
+  type Host,
+  type LispVal,
+  type Program,
+} from "./lisp";
 
 export type GameMode = "playing" | "paused" | "won" | "dead";
 
@@ -24,6 +37,13 @@ export interface LiveEntity {
   alive: boolean;
   hurtFlash: number;
   attackCd: number;
+  name: string;
+  dest: string;
+  variant: EnemyVariant;
+  locked: boolean;
+  open: boolean;
+  path: { x: number; y: number }[] | null;
+  pathAge: number;
 }
 
 export interface GameState {
@@ -56,6 +76,17 @@ export interface GameState {
   fireCd: number;
   zBuffer: Float64Array;
   planeLen: number;
+  inventory: Set<string>;
+  flags: Map<string, LispVal>;
+  script: Program | null;
+  scriptEnv: Env;
+  scriptError: string;
+  timers: { t: number; fn: () => void }[];
+  zonesHere: Set<string>;
+  useLatch: boolean;
+  useHint: string;
+  started: boolean;
+  teleportCd: number;
 }
 
 const MOVE_SPEED = 3.2;
@@ -65,10 +96,13 @@ const MOUSE_SENS = 0.0022;
 const PLAYER_RADIUS = 0.22;
 const FIRE_INTERVAL = 0.18;
 const MAX_AMMO = 99;
-const ENEMY_SPEED = 1.35;
-const ENEMY_RANGE = 1.1;
-const ENEMY_DAMAGE = 12;
-const ENEMY_ATTACK_CD = 0.9;
+const ENEMY_STATS: Record<
+  EnemyVariant,
+  { hp: number; speed: number; damage: number; range: number }
+> = {
+  grunt: { hp: 100, speed: 1.35, damage: 12, range: 1.1 },
+  bruiser: { hp: 220, speed: 0.85, damage: 22, range: 1.25 },
+};
 const HITSCAN_DAMAGE = 34;
 
 function angleToDir(angle: number) {
@@ -87,17 +121,12 @@ function setAngle(state: GameState, angle: number) {
 
 export function createGameState(level: GameLevel): GameState {
   const L = cloneLevel(level);
-  const entities: LiveEntity[] = L.entities.map((e) => ({
-    id: e.id,
-    type: e.type,
-    x: e.x,
-    y: e.y,
-    hp: e.type === "enemy" ? 100 : 1,
-    alive: true,
-    hurtFlash: 0,
-    attackCd: 0.5 + Math.random() * 0.5,
-  }));
+  L.script = L.script ?? "";
+  L.zones = L.zones ?? [];
+  L.marks = L.marks ?? [];
+  const entities: LiveEntity[] = L.entities.map((e) => liveFromLevel(e));
   const totalEnemies = entities.filter((e) => e.type === "enemy").length;
+  const compiled = L.script.trim() ? compileProgram(L.script) : null;
   const state: GameState = {
     level: L,
     px: L.spawn.x,
@@ -128,9 +157,41 @@ export function createGameState(level: GameLevel): GameState {
     fireCd: 0,
     zBuffer: new Float64Array(1),
     planeLen: 0.66,
+    inventory: new Set(),
+    flags: new Map(),
+    script: compiled && compiled.ok ? compiled.program : null,
+    scriptEnv: makeEnv(null),
+    scriptError: compiled && !compiled.ok ? compiled.error : "",
+    timers: [],
+    zonesHere: new Set(),
+    useLatch: false,
+    useHint: "",
+    started: false,
+    teleportCd: 0,
   };
   setAngle(state, L.spawn.angle);
   return state;
+}
+
+function liveFromLevel(e: LevelEntity): LiveEntity {
+  const variant: EnemyVariant = e.variant === "bruiser" ? "bruiser" : "grunt";
+  return {
+    id: e.id,
+    type: e.type,
+    x: e.x,
+    y: e.y,
+    hp: e.type === "enemy" ? ENEMY_STATS[variant].hp : 1,
+    alive: true,
+    hurtFlash: 0,
+    attackCd: 0.5 + Math.random() * 0.5,
+    name: e.name || e.id,
+    dest: e.dest || "",
+    variant,
+    locked: !!e.locked,
+    open: e.type === "door" ? false : true,
+    path: null,
+    pathAge: 0,
+  };
 }
 
 function isWall(state: GameState, x: number, y: number): boolean {
@@ -139,7 +200,24 @@ function isWall(state: GameState, x: number, y: number): boolean {
   if (ix < 0 || iy < 0 || ix >= state.level.width || iy >= state.level.height) {
     return true;
   }
-  return (state.level.walls[iy]?.[ix] ?? 1) > 0;
+  if ((state.level.walls[iy]?.[ix] ?? 1) > 0) return true;
+  return closedDoorAt(state, ix, iy) !== null;
+}
+
+function closedDoorAt(state: GameState, ix: number, iy: number): LiveEntity | null {
+  for (const e of state.entities) {
+    if (!e.alive || e.type !== "door" || e.open) continue;
+    if (Math.floor(e.x) === ix && Math.floor(e.y) === iy) return e;
+  }
+  return null;
+}
+
+function findNamed(state: GameState, name: string): LiveEntity | undefined {
+  return state.entities.find((e) => e.alive && (e.name === name || e.id === name));
+}
+
+function findMark(state: GameState, name: string) {
+  return (state.level.marks ?? []).find((m) => m.name === name);
 }
 
 function blocked(state: GameState, x: number, y: number): boolean {
@@ -218,16 +296,68 @@ function fireWeapon(state: GameState) {
     best.hurtFlash = 0.15;
     state.hitmarker = 0.12;
     sfx.hit();
+    runScript(state, "hurt", best.name, {
+      x: num(best.x),
+      y: num(best.y),
+    });
     if (best.hp <= 0) {
       best.alive = false;
       state.kills += 1;
       state.score += 100;
       sfx.enemyDie();
+      runScript(state, "die", best.name, { x: num(best.x), y: num(best.y) });
       if (state.kills >= state.totalEnemies && state.totalEnemies > 0) {
         state.message = "They're down — find the exit";
       }
     }
+    return;
   }
+
+  const wall = firstWallHit(state, rdx, rdy);
+  if (wall) {
+    const door = closedDoorAt(state, wall.x, wall.y);
+    const mark = (state.level.marks ?? []).find(
+      (m) => m.x === wall.x && m.y === wall.y,
+    );
+    const who = door?.name || mark?.name || null;
+    runScript(state, "shoot", who, { x: num(wall.x), y: num(wall.y) });
+  }
+}
+
+function firstWallHit(
+  state: GameState,
+  rdx: number,
+  rdy: number,
+): { x: number; y: number } | null {
+  let mapX = Math.floor(state.px);
+  let mapY = Math.floor(state.py);
+  const deltaDistX = rdx === 0 ? 1e30 : Math.abs(1 / rdx);
+  const deltaDistY = rdy === 0 ? 1e30 : Math.abs(1 / rdy);
+  let stepX = rdx < 0 ? -1 : 1;
+  let stepY = rdy < 0 ? -1 : 1;
+  let sideDistX =
+    rdx < 0 ? (state.px - mapX) * deltaDistX : (mapX + 1 - state.px) * deltaDistX;
+  let sideDistY =
+    rdy < 0 ? (state.py - mapY) * deltaDistY : (mapY + 1 - state.py) * deltaDistY;
+  for (let g = 0; g < 48; g++) {
+    if (sideDistX < sideDistY) {
+      sideDistX += deltaDistX;
+      mapX += stepX;
+    } else {
+      sideDistY += deltaDistY;
+      mapY += stepY;
+    }
+    if (
+      mapX < 0 ||
+      mapY < 0 ||
+      mapX >= state.level.width ||
+      mapY >= state.level.height
+    ) {
+      return null;
+    }
+    if (isWall(state, mapX + 0.5, mapY + 0.5)) return { x: mapX, y: mapY };
+  }
+  return null;
 }
 
 function updateEnemies(state: GameState, dt: number) {
@@ -235,24 +365,41 @@ function updateEnemies(state: GameState, dt: number) {
     if (!e.alive || e.type !== "enemy") continue;
     e.hurtFlash = Math.max(0, e.hurtFlash - dt);
     e.attackCd = Math.max(0, e.attackCd - dt);
+    const stats = ENEMY_STATS[e.variant] ?? ENEMY_STATS.grunt;
 
     const dx = state.px - e.x;
     const dy = state.py - e.y;
     const dist = Math.hypot(dx, dy);
     if (dist > 14) continue;
 
-    if (dist > ENEMY_RANGE && hasLos(state, e.x, e.y, state.px, state.py)) {
-      const nx = e.x + (dx / dist) * ENEMY_SPEED * dt;
-      const ny = e.y + (dy / dist) * ENEMY_SPEED * dt;
-      if (!isWall(state, nx, e.y)) e.x = nx;
-      if (!isWall(state, e.x, ny)) e.y = ny;
+    if (dist > stats.range) {
+      e.pathAge -= dt;
+      if (!e.path || e.path.length === 0 || e.pathAge <= 0) {
+        e.path = findPath(state, e.x, e.y, state.px, state.py);
+        e.pathAge = 0.35;
+      }
+      const step = e.path?.[0];
+      if (step) {
+        const sx = step.x - e.x;
+        const sy = step.y - e.y;
+        const sl = Math.hypot(sx, sy);
+        if (sl < 0.12) {
+          e.path.shift();
+        } else {
+          const nx = e.x + (sx / sl) * stats.speed * dt;
+          const ny = e.y + (sy / sl) * stats.speed * dt;
+          if (!isWall(state, nx, e.y)) e.x = nx;
+          if (!isWall(state, e.x, ny)) e.y = ny;
+        }
+      }
     }
 
-    if (dist < ENEMY_RANGE && e.attackCd <= 0) {
-      e.attackCd = ENEMY_ATTACK_CD;
-      state.health -= ENEMY_DAMAGE;
+    if (dist < stats.range && e.attackCd <= 0) {
+      e.attackCd = 0.9;
+      state.health -= stats.damage;
       state.shake = Math.max(state.shake, 0.7);
       sfx.hurt();
+      runScript(state, "hurt", "player", { amount: num(stats.damage) });
       if (state.health <= 0) {
         state.health = 0;
         state.mode = "dead";
@@ -260,6 +407,70 @@ function updateEnemies(state: GameState, dt: number) {
       }
     }
   }
+}
+
+function walkableCell(state: GameState, cx: number, cy: number): boolean {
+  if (cx < 0 || cy < 0 || cx >= state.level.width || cy >= state.level.height) {
+    return false;
+  }
+  if ((state.level.walls[cy]?.[cx] ?? 1) > 0) return false;
+  if (closedDoorAt(state, cx, cy)) return false;
+  return true;
+}
+
+function findPath(
+  state: GameState,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): { x: number; y: number }[] {
+  const sx = Math.floor(x0);
+  const sy = Math.floor(y0);
+  const tx = Math.floor(x1);
+  const ty = Math.floor(y1);
+  if (sx === tx && sy === ty) return [{ x: x1, y: y1 }];
+  const key = (x: number, y: number) => x + y * 128;
+  const came = new Map<number, { x: number; y: number }>();
+  const q: { x: number; y: number }[] = [{ x: sx, y: sy }];
+  const seen = new Set<number>([key(sx, sy)]);
+  const dirs = [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ];
+  let found = false;
+  let guard = 0;
+  while (q.length && guard++ < 800) {
+    const cur = q.shift()!;
+    if (cur.x === tx && cur.y === ty) {
+      found = true;
+      break;
+    }
+    for (const [dx, dy] of dirs) {
+      const nx = cur.x + dx!;
+      const ny = cur.y + dy!;
+      const k = key(nx, ny);
+      if (seen.has(k) || !walkableCell(state, nx, ny)) continue;
+      seen.add(k);
+      came.set(k, cur);
+      q.push({ x: nx, y: ny });
+    }
+  }
+  if (!found) return [];
+  const cells: { x: number; y: number }[] = [];
+  let cx = tx;
+  let cy = ty;
+  while (!(cx === sx && cy === sy)) {
+    cells.push({ x: cx + 0.5, y: cy + 0.5 });
+    const prev = came.get(key(cx, cy));
+    if (!prev) break;
+    cx = prev.x;
+    cy = prev.y;
+  }
+  cells.reverse();
+  return cells;
 }
 
 function updatePickups(state: GameState) {
@@ -273,11 +484,34 @@ function updatePickups(state: GameState) {
       state.ammo = Math.min(MAX_AMMO, state.ammo + 15);
       state.score += 10;
       sfx.pickup();
+      runScript(state, "pickup", e.name);
     } else if (e.type === "health") {
       e.alive = false;
       state.health = Math.min(100, state.health + 25);
       state.score += 10;
       sfx.pickup();
+      runScript(state, "pickup", e.name);
+    } else if (e.type === "pickup") {
+      e.alive = false;
+      sfx.pickup();
+      state.inventory.add(e.name);
+      runScript(state, "pickup", e.name);
+    } else if (e.type === "teleport") {
+      if (state.teleportCd > 0 || !e.dest) continue;
+      const destEnt = findNamed(state, e.dest);
+      const m = findMark(state, e.dest);
+      const dest = destEnt
+        ? { x: destEnt.x, y: destEnt.y }
+        : m
+          ? { x: m.x + 0.5, y: m.y + 0.5 }
+          : null;
+      if (dest) {
+        state.px = dest.x;
+        state.py = dest.y;
+        state.teleportCd = 0.85;
+        sfx.pickup();
+        runScript(state, "teleport", e.name);
+      }
     } else if (e.type === "exit") {
       if (state.kills >= state.totalEnemies) {
         e.alive = false;
@@ -309,7 +543,7 @@ export function updateGame(state: GameState, dt: number) {
   // Keyboard turn: left decreases angle, right increases angle
   let rot = 0;
   if (state.keys.has("ArrowLeft") || state.keys.has("KeyQ")) rot -= 1;
-  if (state.keys.has("ArrowRight") || state.keys.has("KeyE")) rot += 1;
+  if (state.keys.has("ArrowRight")) rot += 1;
   if (rot !== 0) setAngle(state, state.angle + rot * ROT_SPEED * d);
 
   // FPS: W +forward, S -forward, D +right, A -right
@@ -352,19 +586,297 @@ export function updateGame(state: GameState, dt: number) {
   state.shake = Math.max(0, state.shake - d * 3);
   state.muzzle = Math.max(0, state.muzzle - d);
   state.hitmarker = Math.max(0, state.hitmarker - d);
+  state.teleportCd = Math.max(0, state.teleportCd - d);
 
   if (state.fireHeld || state.keys.has("Space")) {
     fireWeapon(state);
   }
 
+  if (state.keys.has("KeyE")) {
+    if (!state.useLatch) {
+      state.useLatch = true;
+      tryUse(state);
+    }
+  } else {
+    state.useLatch = false;
+  }
+
+  updateUseHint(state);
+  updateZones(state);
+  updateTimers(state, d);
   updateEnemies(state, d);
   updatePickups(state);
+
+  if (!state.started) {
+    state.started = true;
+    if (state.script) {
+      try {
+        evalForms(state.script.boot, state.scriptEnv, makeHost(state));
+      } catch (err) {
+        state.scriptError = err instanceof Error ? err.message : "Script error";
+        state.message = state.scriptError;
+      }
+      runScript(state, "start", null);
+    }
+    if (state.scriptError) state.message = state.scriptError;
+  }
 }
 
-function getSpriteImg(type: LiveEntity["type"], atlas: TextureAtlas) {
-  if (type === "enemy") return atlas.enemy;
-  if (type === "ammo") return atlas.ammo;
-  if (type === "health") return atlas.health;
+function runScript(
+  state: GameState,
+  event: string,
+  name: string | null,
+  extras: Record<string, LispVal> = {},
+) {
+  if (!state.script || state.mode === "dead") return;
+  try {
+    fireHandlers(
+      state.script,
+      state.scriptEnv,
+      makeHost(state),
+      event,
+      name,
+      extras,
+    );
+  } catch (err) {
+    state.scriptError = err instanceof Error ? err.message : "Script error";
+    state.message = state.scriptError;
+  }
+}
+
+function makeHost(state: GameState): Host {
+  const setDoor = (name: string, patch: Partial<LiveEntity>) => {
+    const e = findNamed(state, name);
+    if (!e || e.type !== "door") return false;
+    Object.assign(e, patch);
+    return true;
+  };
+  return {
+    say: (msg) => {
+      state.message = msg;
+    },
+    give: (what, n) => {
+      if (what === "ammo") {
+        state.ammo = Math.min(MAX_AMMO, state.ammo + (n ?? 15));
+        return true;
+      }
+      if (what === "health") {
+        state.health = Math.min(200, state.health + (n ?? 25));
+        return true;
+      }
+      state.inventory.add(what);
+      return true;
+    },
+    take: (what, n) => {
+      if (what === "ammo") {
+        state.ammo = Math.max(0, state.ammo - (n ?? 1));
+        return true;
+      }
+      if (what === "health") {
+        state.health = Math.max(0, state.health - (n ?? 1));
+        return true;
+      }
+      return state.inventory.delete(what);
+    },
+    has: (what) => {
+      if (what === "ammo") return state.ammo > 0;
+      return state.inventory.has(what);
+    },
+    getVar: (key) => state.flags.get(key) ?? nil(),
+    setVar: (key, val) => {
+      state.flags.set(key, val);
+    },
+    open: (name) => setDoor(name, { open: true }),
+    close: (name) => setDoor(name, { open: false }),
+    lock: (name) => setDoor(name, { locked: true }),
+    unlock: (name) => setDoor(name, { locked: false }),
+    isLocked: (name) => !!findNamed(state, name)?.locked,
+    isOpen: (name) => !!findNamed(state, name)?.open,
+    setWall: (a, b, c) => {
+      let x: number, y: number, tex: number;
+      if (a.k === "sym" || a.k === "str") {
+        const mark = findMark(state, a.v);
+        const door = findNamed(state, a.v);
+        if (mark) {
+          x = mark.x;
+          y = mark.y;
+        } else if (door) {
+          x = Math.floor(door.x);
+          y = Math.floor(door.y);
+        } else return false;
+        tex = b && b.k === "num" ? b.v : 0;
+      } else if (a.k === "num" && b?.k === "num") {
+        x = Math.floor(a.v);
+        y = Math.floor(b.v);
+        tex = c && c.k === "num" ? c.v : 0;
+      } else return false;
+      if (y < 0 || x < 0 || y >= state.level.height || x >= state.level.width) {
+        return false;
+      }
+      state.level.walls[y]![x] = Math.max(0, Math.min(6, tex | 0));
+      return true;
+    },
+    spawn: (type, x, y, name, variant) => {
+      const id = uid(type.slice(0, 2));
+      const ent = liveFromLevel({
+        id,
+        type: type as LevelEntity["type"],
+        x,
+        y,
+        name: name || id,
+        variant: variant === "bruiser" ? "bruiser" : "grunt",
+      });
+      if (ent.type === "enemy") state.totalEnemies += 1;
+      state.entities.push(ent);
+      return name || id;
+    },
+    remove: (name) => {
+      const e = findNamed(state, name);
+      if (!e) return false;
+      e.alive = false;
+      return true;
+    },
+    teleport: (who, dest, y) => {
+      let tx: number | null = null;
+      let ty: number | null = null;
+      if (dest.k === "num" && y?.k === "num") {
+        tx = dest.v;
+        ty = y.v;
+      } else if (dest.k === "sym" || dest.k === "str") {
+        const e = findNamed(state, dest.v);
+        const m = findMark(state, dest.v);
+        if (e) {
+          tx = e.x;
+          ty = e.y;
+        } else if (m) {
+          tx = m.x + 0.5;
+          ty = m.y + 0.5;
+        }
+      }
+      if (tx === null || ty === null) return false;
+      if (who === "player") {
+        state.px = tx;
+        state.py = ty;
+        return true;
+      }
+      const e = findNamed(state, who);
+      if (!e) return false;
+      e.x = tx;
+      e.y = ty;
+      return true;
+    },
+    win: () => {
+      state.mode = "won";
+      state.message = "SECTOR CLEARED";
+      sfx.win();
+    },
+    lose: () => {
+      state.mode = "dead";
+      state.message = "YOU DIED";
+    },
+    after: (sec, fn) => {
+      state.timers.push({ t: Math.max(0, sec), fn });
+    },
+  };
+}
+
+function tryUse(state: GameState) {
+  const aheadX = state.px + state.dirX * 0.9;
+  const aheadY = state.py + state.dirY * 0.9;
+  const cx = Math.floor(aheadX);
+  const cy = Math.floor(aheadY);
+  const mark = (state.level.marks ?? []).find((m) => m.x === cx && m.y === cy);
+  let best: LiveEntity | null = null;
+  let bestD = 1.6;
+  for (const e of state.entities) {
+    if (!e.alive) continue;
+    if (e.type !== "door" && e.type !== "pickup" && !e.name) continue;
+    const d = Math.hypot(e.x - aheadX, e.y - aheadY);
+    if (d < bestD) {
+      bestD = d;
+      best = e;
+    }
+  }
+  const who = best?.name || mark?.name || null;
+  if (best?.type === "door") {
+    if (best.locked) {
+      state.message = "Locked";
+    } else {
+      best.open = !best.open;
+      sfx.click?.();
+    }
+  }
+  if (who) runScript(state, "use", who, { x: num(cx), y: num(cy) });
+}
+
+function updateUseHint(state: GameState) {
+  const aheadX = state.px + state.dirX * 0.9;
+  const aheadY = state.py + state.dirY * 0.9;
+  const cx = Math.floor(aheadX);
+  const cy = Math.floor(aheadY);
+  const nearbyDoor = state.entities.find(
+    (e) =>
+      e.alive &&
+      e.type === "door" &&
+      Math.hypot(e.x - aheadX, e.y - aheadY) < 1.2,
+  );
+  const mark = (state.level.marks ?? []).find((m) => m.x === cx && m.y === cy);
+  if (nearbyDoor) {
+    state.useHint = nearbyDoor.locked
+      ? "E  Locked"
+      : nearbyDoor.open
+        ? "E  Close"
+        : "E  Open";
+  } else if (mark) {
+    state.useHint = `E  Use ${mark.name}`;
+  } else {
+    state.useHint = "";
+  }
+}
+
+function updateZones(state: GameState) {
+  const px = Math.floor(state.px);
+  const py = Math.floor(state.py);
+  const now = new Set<string>();
+  for (const z of state.level.zones ?? []) {
+    if (px >= z.x && py >= z.y && px < z.x + z.w && py < z.y + z.h) {
+      now.add(z.name);
+    }
+  }
+  for (const name of now) {
+    if (!state.zonesHere.has(name)) runScript(state, "enter", name);
+  }
+  for (const name of state.zonesHere) {
+    if (!now.has(name)) runScript(state, "leave", name);
+  }
+  state.zonesHere = now;
+}
+
+function updateTimers(state: GameState, dt: number) {
+  if (!state.timers.length) return;
+  const left: { t: number; fn: () => void }[] = [];
+  for (const t of state.timers) {
+    t.t -= dt;
+    if (t.t <= 0) {
+      try {
+        t.fn();
+      } catch {
+        /* ignore */
+      }
+    } else left.push(t);
+  }
+  state.timers = left;
+}
+
+function getSpriteImg(ent: LiveEntity, atlas: TextureAtlas) {
+  if (ent.type === "enemy") {
+    return ent.variant === "bruiser" ? atlas.bruiser : atlas.enemy;
+  }
+  if (ent.type === "ammo") return atlas.ammo;
+  if (ent.type === "health") return atlas.health;
+  if (ent.type === "door") return atlas.door;
+  if (ent.type === "teleport") return atlas.teleport;
+  if (ent.type === "pickup") return atlas.pickup;
   return atlas.exit;
 }
 
@@ -460,6 +972,9 @@ export function renderGame(
       if (cell > 0) {
         hit = 1;
         texId = cell;
+      } else if (closedDoorAt(state, mapX, mapY)) {
+        hit = 1;
+        texId = 3;
       }
     }
 
@@ -508,6 +1023,7 @@ export function renderGame(
   const sprites: { ent: LiveEntity; dist: number }[] = [];
   for (const e of state.entities) {
     if (!e.alive) continue;
+    if (e.type === "door" && !e.open) continue;
     const dist =
       (e.x - state.px) * (e.x - state.px) + (e.y - state.py) * (e.y - state.py);
     sprites.push({ ent: e, dist });
@@ -535,7 +1051,7 @@ export function renderGame(
     const drawStartX = Math.floor(-spriteW / 2 + spriteScreenX + shakeX);
     const drawEndX = Math.floor(spriteW / 2 + spriteScreenX + shakeX);
 
-    const img = getSpriteImg(ent.type, atlas);
+    const img = getSpriteImg(ent, atlas);
     const shade = Math.min(1, 1.1 / (1 + transformY * 0.2));
     const flash = ent.hurtFlash > 0;
 
@@ -760,9 +1276,12 @@ export function renderMinimap(
 
   for (const e of state.entities) {
     if (!e.alive) continue;
-    if (e.type === "enemy") ctx.fillStyle = "#e04040";
+    if (e.type === "enemy") ctx.fillStyle = e.variant === "bruiser" ? "#a050d0" : "#e04040";
     else if (e.type === "ammo") ctx.fillStyle = "#d4a017";
     else if (e.type === "health") ctx.fillStyle = "#40c060";
+    else if (e.type === "door") ctx.fillStyle = e.open ? "#6b4a3a" : "#c08040";
+    else if (e.type === "teleport") ctx.fillStyle = "#4080e0";
+    else if (e.type === "pickup") ctx.fillStyle = "#d060c0";
     else ctx.fillStyle = "#40e0a0";
     ctx.beginPath();
     ctx.arc(e.x * cell, e.y * cell, cell * 0.35, 0, Math.PI * 2);

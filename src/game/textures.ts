@@ -7,9 +7,13 @@ export type TextureAtlas = {
   /** wallTextures[id-1] = ImageData RGBA */
   walls: ImageData[];
   enemy: ImageData;
+  bruiser: ImageData;
   ammo: ImageData;
   health: ImageData;
   exit: ImageData;
+  door: ImageData;
+  teleport: ImageData;
+  pickup: ImageData;
   weapon: ImageData;
 };
 
@@ -151,7 +155,7 @@ function makeWall(kind: number): ImageData {
   return img;
 }
 
-function makeEnemy(): ImageData {
+function makeEnemy(bruiser = false): ImageData {
   const img = new ImageData(TEX_SIZE, TEX_SIZE);
   const d = img.data;
   // transparent bg
@@ -168,7 +172,7 @@ function makeEnemy(): ImageData {
       // legs
       if (y > 40 && y < 60) {
         if (Math.abs(dx - 8) < 5 || Math.abs(dx + 8) < 5) {
-          setPx(d, x, y, 90, 30, 30, 255);
+          setPx(d, x, y, bruiser ? 50 : 90, 30, bruiser ? 70 : 30, 255);
         }
       }
       // torso
@@ -200,7 +204,7 @@ function makeEnemy(): ImageData {
   return img;
 }
 
-function makePickup(r: number, g: number, b: number, glyph: "A" | "+"): ImageData {
+function makePickup(r: number, g: number, b: number, glyph: string): ImageData {
   const img = new ImageData(TEX_SIZE, TEX_SIZE);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) d[i + 3] = 0;
@@ -296,9 +300,13 @@ export function getTextures(): TextureAtlas {
     size: TEX_SIZE,
     walls: [1, 2, 3, 4, 5, 6].map(makeWall),
     enemy: makeEnemy(),
+    bruiser: makeEnemy(true),
     ammo: makePickup(200, 160, 40, "A"),
     health: makePickup(40, 180, 80, "+"),
     exit: makeExit(),
+    door: makePickup(160, 90, 40, "D"),
+    teleport: makePickup(80, 140, 220, "T"),
+    pickup: makePickup(180, 80, 200, "*"),
     weapon: makeWeapon(),
   };
   return cached;
