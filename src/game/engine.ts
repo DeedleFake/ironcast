@@ -868,6 +868,44 @@ function updateTimers(state: GameState, dt: number) {
   state.timers = left;
 }
 
+function padTint(
+  fx: number,
+  fy: number,
+  pads: { x: number; y: number }[],
+): [number, number, number, number] | null {
+  let best: [number, number, number, number] | null = null;
+  let bestA = 0;
+  for (const p of pads) {
+    const dx = fx - p.x;
+    const dy = fy - p.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > 0.42 * 0.42) continue;
+    const d = Math.sqrt(d2);
+    let r = 30;
+    let g = 90;
+    let b = 160;
+    let a = 0.22;
+    if (d > 0.28 && d < 0.4) {
+      const edge = 1 - Math.abs(d - 0.34) / 0.06;
+      r = 80;
+      g = 190;
+      b = 255;
+      a = 0.35 + edge * 0.55;
+    } else if (d < 0.13) {
+      const core = 1 - d / 0.13;
+      r = 140;
+      g = 220;
+      b = 255;
+      a = 0.2 + core * 0.35;
+    }
+    if (a > bestA) {
+      bestA = a;
+      best = [r, g, b, a];
+    }
+  }
+  return best;
+}
+
 function getSpriteImg(ent: LiveEntity, atlas: TextureAtlas) {
   if (ent.type === "enemy") {
     return ent.variant === "bruiser" ? atlas.bruiser : atlas.enemy;
@@ -906,6 +944,10 @@ export function renderGame(
   const ceils = state.level.ceils;
   const mapW = state.level.width;
   const mapH = state.level.height;
+  const pads: { x: number; y: number }[] = [];
+  for (const e of state.entities) {
+    if (e.alive && e.type === "teleport") pads.push({ x: e.x, y: e.y });
+  }
 
   for (let col = 0; col < width; col++) {
     const cameraX = (2 * col) / width - 1;
@@ -1049,10 +1091,22 @@ export function renderGame(
           ? (floors[cy]?.[cx] ?? 0x2a2420)
           : 0x2a2420;
       const fog = Math.min(1, 1.15 / (1 + rowDist * 0.18));
+      let r = ((packed >> 16) & 255) * fog;
+      let g = ((packed >> 8) & 255) * fog;
+      let b = (packed & 255) * fog;
+      if (pads.length) {
+        const tint = padTint(fx, fy, pads);
+        if (tint) {
+          const a = tint[3];
+          r = r * (1 - a) + tint[0] * a;
+          g = g * (1 - a) + tint[1] * a;
+          b = b * (1 - a) + tint[2] * a;
+        }
+      }
       const i = (y * width + colX) * 4;
-      pix[i] = (((packed >> 16) & 255) * fog) | 0;
-      pix[i + 1] = (((packed >> 8) & 255) * fog) | 0;
-      pix[i + 2] = ((packed & 255) * fog) | 0;
+      pix[i] = r | 0;
+      pix[i + 1] = g | 0;
+      pix[i + 2] = b | 0;
       pix[i + 3] = 255;
     }
   }
@@ -1061,6 +1115,7 @@ export function renderGame(
   for (const e of state.entities) {
     if (!e.alive) continue;
     if (e.type === "door" && !e.open) continue;
+    if (e.type === "teleport") continue;
     const dist =
       (e.x - state.px) * (e.x - state.px) + (e.y - state.py) * (e.y - state.py);
     sprites.push({ ent: e, dist });

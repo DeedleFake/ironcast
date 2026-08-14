@@ -477,6 +477,10 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   }, [undo, redo, chooseDrawTool, chooseMetaTool, chooseBrush]);
 
   useEffect(() => {
+    if (tool !== "select") setSelection([]);
+  }, [tool]);
+
+  useEffect(() => {
     const wrap = canvasWrap.current;
     if (!wrap) return;
     const fit = () => {
@@ -663,6 +667,40 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const selEmpties = selCells.filter(
     (s) => (level.walls[s.y]?.[s.x] ?? 0) === 0,
   );
+  const groundEmpties: { x: number; y: number }[] = [];
+  let occupantsOnEmpty = true;
+  let occupantCount = 0;
+  for (const s of liveSel) {
+    let x = -1;
+    let y = -1;
+    if (s.k === "entity") {
+      const e = level.entities.find((ent) => ent.id === s.id);
+      if (!e) continue;
+      x = Math.floor(e.x);
+      y = Math.floor(e.y);
+    } else if (s.k === "spawn") {
+      x = Math.floor(level.spawn.x);
+      y = Math.floor(level.spawn.y);
+    } else if (s.k === "mark") {
+      x = s.x;
+      y = s.y;
+    } else {
+      continue;
+    }
+    occupantCount += 1;
+    if ((level.walls[y]?.[x] ?? 0) !== 0) {
+      occupantsOnEmpty = false;
+      continue;
+    }
+    groundEmpties.push({ x, y });
+  }
+  const floorCells =
+    can.has("floor")
+      ? selEmpties
+      : occupantCount > 0 && occupantsOnEmpty
+        ? groundEmpties
+        : [];
+  const showFloor = floorCells.length > 0;
   const hasSpawn = liveSel.some((s) => s.k === "spawn");
   const singleEnt = liveSel.length === 1 && liveSel[0]!.k === "entity" ? selEnts[0] : null;
   const singleMark =
@@ -961,7 +999,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     Click a thing, or drag a box. Hold Shift to add or remove.
                   </p>
                 ) : null}
-                {liveSel.length > 0 && can.size === 0 ? (
+                {liveSel.length > 0 && can.size === 0 && !showFloor ? (
                   <p className="text-[10px] leading-snug text-dim">
                     No shared options for this mix.
                   </p>
@@ -1073,52 +1111,6 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     })}
                   </div>
                 ) : null}
-                {can.has("floor") ? (
-                  <>
-                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                      Floor
-                      <input
-                        type="color"
-                        value={hexFromColor(
-                          level.floors[selEmpties[0]!.y]?.[selEmpties[0]!.x] ??
-                            DEFAULT_FLOOR,
-                        )}
-                        onChange={(e) => {
-                          const n = parseHexColor(e.target.value);
-                          editSel((L) => {
-                            for (const s of selEmpties) {
-                              if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
-                                L.floors[s.y]![s.x] = n;
-                              }
-                            }
-                          });
-                        }}
-                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                      Ceiling
-                      <input
-                        type="color"
-                        value={hexFromColor(
-                          level.ceils[selEmpties[0]!.y]?.[selEmpties[0]!.x] ??
-                            DEFAULT_CEIL,
-                        )}
-                        onChange={(e) => {
-                          const n = parseHexColor(e.target.value);
-                          editSel((L) => {
-                            for (const s of selEmpties) {
-                              if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
-                                L.ceils[s.y]![s.x] = n;
-                              }
-                            }
-                          });
-                        }}
-                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                      />
-                    </label>
-                  </>
-                ) : null}
                 {can.has("variant") ? (
                   <div className="flex gap-1">
                     {(["grunt", "bruiser"] as const).map((v) => (
@@ -1160,6 +1152,52 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   </button>
                 ) : null}
               </Section>
+              {showFloor ? (
+                <Section title="Ground">
+                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                    Floor
+                    <input
+                      type="color"
+                      value={hexFromColor(
+                        level.floors[floorCells[0]!.y]?.[floorCells[0]!.x] ??
+                          DEFAULT_FLOOR,
+                      )}
+                      onChange={(e) => {
+                        const n = parseHexColor(e.target.value);
+                        editSel((L) => {
+                          for (const s of floorCells) {
+                            if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
+                              L.floors[s.y]![s.x] = n;
+                            }
+                          }
+                        });
+                      }}
+                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                    />
+                  </label>
+                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                    Ceiling
+                    <input
+                      type="color"
+                      value={hexFromColor(
+                        level.ceils[floorCells[0]!.y]?.[floorCells[0]!.x] ??
+                          DEFAULT_CEIL,
+                      )}
+                      onChange={(e) => {
+                        const n = parseHexColor(e.target.value);
+                        editSel((L) => {
+                          for (const s of floorCells) {
+                            if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
+                              L.ceils[s.y]![s.x] = n;
+                            }
+                          }
+                        });
+                      }}
+                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                    />
+                  </label>
+                </Section>
+              ) : null}
             </div>
           ) : null}
 
