@@ -1,0 +1,22 @@
+import { chromium } from "playwright";
+const browser = await chromium.launch({ headless: true });
+const page = await (await browser.newContext({ viewport: { width: 1400, height: 900 } })).newPage();
+await page.goto("http://127.0.0.1:8080/", { waitUntil: "networkidle" });
+await page.getByRole("button", { name: /Level editor/i }).click();
+await page.waitForTimeout(300);
+await page.getByTitle("Script tutorial").click();
+await page.getByRole("button", { name: "Insert sample" }).click();
+await page.waitForTimeout(150);
+await page.getByRole("button", { name: "Format" }).click();
+await page.waitForTimeout(80);
+const src = await page.locator("textarea").last().inputValue();
+console.log("---FORMATTED---");
+console.log(src);
+console.log("---END---");
+// Lisp style: no hanging closing parens on their own line
+const hanging = src.split("\n").filter((l) => /^\s*\)+\s*$/.test(l));
+if (hanging.length) throw new Error("hanging parens:\n" + hanging.join("\n"));
+if (!src.includes("(on start")) throw new Error("missing (on start");
+if (!src.includes("(if (locked? door-armory)")) throw new Error("if should keep cond on first line");
+await browser.close();
+console.log("OK");

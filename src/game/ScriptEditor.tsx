@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { formatLisp, tokenize } from "./lisp";
 
 const KIND_CLASS: Record<string, string> = {
@@ -12,6 +12,24 @@ const KIND_CLASS: Record<string, string> = {
   ws: "",
 };
 
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&")
+    .replace(/</g, "<")
+    .replace(/>/g, ">");
+}
+
+function highlightHtml(src: string): string {
+  return tokenize(src || " ")
+    .map((t) => {
+      const text = escapeHtml(t.text);
+      const cls = KIND_CLASS[t.kind];
+      if (!cls) return text;
+      return `<span class="${cls}">${text}</span>`;
+    })
+    .join("");
+}
+
 export function ScriptEditor({
   value,
   onChange,
@@ -23,6 +41,7 @@ export function ScriptEditor({
 }) {
   const preRef = useRef<HTMLPreElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const html = useMemo(() => highlightHtml(value), [value]);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -41,8 +60,6 @@ export function ScriptEditor({
     if (result.ok) onChange(result.text);
   };
 
-  const tokens = tokenize(value || " ");
-
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
@@ -60,18 +77,8 @@ export function ScriptEditor({
           ref={preRef}
           aria-hidden
           className="pointer-events-none absolute inset-0 overflow-auto p-2 font-mono text-xs leading-5 whitespace-pre"
-        >
-          {tokens.map((t, i) =>
-            t.kind === "ws" ? (
-              t.text
-            ) : (
-              <span key={i} className={KIND_CLASS[t.kind] || "text-fg"}>
-                {t.text}
-              </span>
-            ),
-          )}
-          {value.endsWith("\n") ? "\n" : ""}
-        </pre>
+          dangerouslySetInnerHTML={{ __html: html || " " }}
+        />
         <textarea
           ref={taRef}
           value={value}

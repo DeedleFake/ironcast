@@ -307,14 +307,51 @@ export function formatLisp(src: string): { ok: true; text: string } | { ok: fals
   return { ok: true, text: body ? body + "\n" : "" };
 }
 
+const MAX_INLINE = 72;
+
+const BODY_SPECIALS = new Set([
+  "on",
+  "def",
+  "fn",
+  "lambda",
+  "let",
+  "if",
+  "when",
+  "unless",
+  "do",
+  "after",
+]);
+
 function formatVal(v: LispVal, indent: number): string {
-  const pad = "  ".repeat(indent);
   if (v.k !== "list") return formatAtom(v);
   if (v.v.length === 0) return "()";
-  const head = v.v[0]!;
-  const headName = head.k === "sym" ? head.v : "";
+  if (v.v[0]?.k === "sym" && v.v[0].v === "quote" && v.v.length === 2) {
+    return "'" + formatVal(v.v[1]!, indent);
+  }
 
-  if (["on", "when", "unless", "after"].includes(headName)) {
+  const headName = v.v[0]?.k === "sym" ? v.v[0].v : "";
+  const inline = formatInline(v);
+  const col = indent * 2;
+  if (!BODY_SPECIALS.has(headName) && inline.length + col <= MAX_INLINE) {
+    return inline;
+  }
+  return formatBlock(v, indent);
+}
+
+/** Close parens hang off the last form — never on their own line. */
+function closeOn(lines: string[]): string {
+  if (!lines.length) return ")";
+  lines[lines.length - 1] += ")";
+  return lines.join("\n");
+}
+
+function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
+  const pad = "  ".repeat(indent);
+  const body = pad + "  ";
+  const head = v.v[0]!;
+  const headName = head.k === "sym" ? head.v : formatVal(head, indent);
+
+  if (headName === "on" || headName === "after") {
     let i = 1;
     let header = `(${headName}`;
     while (i < v.v.length && v.v[i]!.k !== "list") {
@@ -322,41 +359,88 @@ function formatVal(v: LispVal, indent: number): string {
       i++;
     }
     if (i >= v.v.length) return header + ")";
-    const rest = v.v
-      .slice(i)
-      .map((item) => pad + "  " + formatVal(item, indent + 1));
-    return `${header}\n${rest.join("\n")}\n${pad})`;
+    const lines = [header];
+    for (; i < v.v.length; i++) {
+      lines.push(body + formatVal(v.v[i]!, indent + 1));
+    }
+    return closeOn(lines);
+  }
+
+  if (headName === "when" || headName === "unless") {
+    const cond = v.v[1] ? formatVal(v.v[1], indent + 1) : "nil";
+    const lines = [`(${headName} ${cond}`];
+    for (const item of v.v.slice(2)) {
+      lines.push(body + formatVal(item, indent + 1));
+    }
+    return closeOn(lines);
   }
 
   if (headName === "def" || headName === "fn" || headName === "lambda") {
-    const namePart = v.v[1] ? " " + formatInline(v.v[1]) : "";
-    const body = v.v.slice(2);
-    if (body.length === 0) return `(${headName}${namePart})`;
-    if (body.length === 1 && formatInline(body[0]!).length < 48) {
-      return `(${headName}${namePart} ${formatInline(body[0]!)})`;
+    const sig = v.v[1] ? " " + formatInline(v.v[1]) : "";
+    const rest = v.v.slice(2);
+    if (rest.length === 0) return `(${headName}${sig})`;
+    const lines = [`(${headName}${sig}`];
+    for (const item of rest) lines.push(body + formatVal(item, indent + 1));
+    return closeOn(lines);
+  }
+
+  if (headName === "if") {
+    const cond = v.v[1] ? formatVal(v.v[1], indent + 1) : "nil";
+    const thenPad = pad + "    ";
+    const lines = [`(if ${cond}`];
+    for (const item of v.v.slice(2)) {
+      lines.push(thenPad + formatVal(item, indent + 2));
     }
-    return `(${headName}${namePart}\n${body
-      .map((item) => pad + "  " + formatVal(item, indent + 1))
-      .join("\n")}\n${pad})`;
+    return closeOn(lines);
   }
 
-  if (headName === "if" || headName === "let") {
-    const bits = v.v.slice(1).map((item) => pad + "  " + formatVal(item, indent + 1));
-    return `(${headName}\n${bits.join("\n")}\n${pad})`;
+  if (headName === "let") {
+    const binds = v.v[1];
+    let bindStr = "()";
+    if (binds && binds.k === "list") {
+      if (binds.v.length <= 1) {
+        bindStr = formatInline(binds);
+      } else {
+        const bindPad = pad + "     "; // align under first binding after "(let "
+        bindStr = binds.v
+          .map((b, i) => (i === 0 ? formatInline(b) : bindPad + formatInline(b)))
+          .join("\n");
+        bindStr = `(${bindStr})`;
+      }
+    }
+    const lines = [`(let ${bindStr}`];
+    for (const item of v.v.slice(2)) {
+      lines.push(body + formatVal(item, indent + 1));
+    }
+    return closeOn(lines);
   }
 
-  const inline = formatInline(v);
-  if (inline.length <= 72 && !v.v.some((x) => x.k === "list" && x.v.some((y) => y.k === "list"))) {
-    return inline;
+  if (headName === "do") {
+    const lines = ["(do"];
+    for (const item of v.v.slice(1)) {
+      lines.push(body + formatVal(item, indent + 1));
+    }
+    return closeOn(lines);
   }
-  const inner = v.v
-    .map((item, i) => (i === 0 ? formatVal(item, indent + 1) : pad + "  " + formatVal(item, indent + 1)))
-    .join("\n");
-  return `(${inner}\n${pad})`;
+
+  // Regular call: first line is (fn arg1 …) until wrap, rest aligned under first arg
+  const args = v.v.slice(1);
+  if (args.length === 0) return `(${headName})`;
+  const fnW = headName.length;
+  const argPad = pad + " ".repeat(fnW + 2);
+  const first = formatVal(args[0]!, indent);
+  const lines = [`(${headName} ${first}`];
+  for (const a of args.slice(1)) {
+    lines.push(argPad + formatVal(a, indent));
+  }
+  return closeOn(lines);
 }
 
 function formatInline(v: LispVal): string {
   if (v.k !== "list") return formatAtom(v);
+  if (v.v[0]?.k === "sym" && v.v[0].v === "quote" && v.v.length === 2) {
+    return "'" + formatInline(v.v[1]!);
+  }
   return `(${v.v.map(formatInline).join(" ")})`;
 }
 
