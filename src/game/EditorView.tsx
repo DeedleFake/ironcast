@@ -104,9 +104,19 @@ const THINGS: { id: ThingKind; label: string; icon: React.ReactNode }[] = [
   { id: "door", label: "Door", icon: <DoorClosed className="size-4" /> },
   { id: "teleport", label: "Pad", icon: <Spline className="size-4" /> },
   { id: "pickup", label: "Pickup", icon: <Star className="size-4" /> },
+];
+
+const AREAS: { id: "zone" | "mark"; label: string; icon: React.ReactNode }[] = [
   { id: "zone", label: "Zone", icon: <BoxSelect className="size-4" /> },
   { id: "mark", label: "Mark", icon: <Tag className="size-4" /> },
 ];
+
+function isZoneBrush(b: Brush) {
+  return b.kind === "thing" && b.thing === "zone";
+}
+function isMarkBrush(b: Brush) {
+  return b.kind === "thing" && b.thing === "mark";
+}
 
 const TOOL_KEY: Record<string, EditorTool> = {
   KeyP: "paint",
@@ -367,8 +377,9 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
 
   const previewCells = useMemo(() => {
     if (!drag) return [];
-    const zoneBrush = brush.kind === "thing" && brush.thing === "zone";
-    if (tool === "rect" || zoneBrush) return rectCells(drag, true);
+    const zonePaint =
+      tool !== "erase" && tool !== "eyedrop" && isZoneBrush(brush);
+    if (zonePaint) return rectCells(drag, true);
     if (tool === "rectFill") return rectCells(drag, false);
     if (tool === "line") return lineCells(drag.x0, drag.y0, drag.x1, drag.y1);
     return [];
@@ -408,8 +419,11 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const brushLabel =
     brush.kind === "wall"
       ? (WALL_NAMES[brush.tex] ?? "Wall")
-      : THINGS.find((t) => t.id === brush.thing)?.label ?? "Thing";
+      : [...THINGS, ...AREAS].find((t) => t.id === brush.thing)?.label ?? "Thing";
   const toolLabel = ALL_TOOLS.find((t) => t.id === tool)?.label ?? tool;
+  const nameKind =
+    brush.kind === "thing" && brush.thing !== "spawn" ? brush.thing : null;
+  const namePlaceholder = nameKind ? autoName(level, nameKind) : "name";
 
   return (
     <div className="flex h-[calc(100dvh-var(--grok-banner-h,0px))] flex-col bg-bg">
@@ -578,53 +592,29 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 );
               })}
             </div>
-            <button
-              type="button"
-              onClick={rotateSpawn}
-              className="mt-1 flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-[11px] text-muted hover:bg-surface hover:text-fg"
-              title="Rotate spawn facing"
-            >
-              <RotateCcw className="size-3.5" />
-              Turn spawn
-            </button>
-            <label className="mt-1 block text-[11px] text-muted">
-              Name
-              <input
-                value={thingName}
-                onChange={(e) => setThingName(e.target.value)}
-                placeholder="door-armory"
-                className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
-              />
-            </label>
-            {brush.kind === "thing" && brush.thing === "teleport" ? (
-              <label className="block text-[11px] text-muted">
-                Destination
-                <input
-                  value={thingDest}
-                  onChange={(e) => setThingDest(e.target.value)}
-                  placeholder="yard"
-                  className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
-                />
-              </label>
-            ) : null}
-            {brush.kind === "thing" && brush.thing === "enemy" ? (
-              <div className="flex gap-1">
-                {(["grunt", "bruiser"] as const).map((v) => (
+          </Section>
+
+          <Section title="Areas">
+            <div className="grid grid-cols-2 gap-1">
+              {AREAS.map((t) => {
+                const active = brush.kind === "thing" && brush.thing === t.id;
+                return (
                   <button
-                    key={v}
+                    key={t.id}
                     type="button"
-                    onClick={() => setVariant(v)}
-                    className={`flex-1 rounded-md border px-2 py-1 text-[11px] capitalize ${
-                      variant === v
+                    onClick={() => setBrush({ kind: "thing", thing: t.id })}
+                    className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                      active
                         ? "border-primary bg-primary/15 text-fg"
-                        : "border-border text-muted"
+                        : "border-transparent text-muted hover:border-border hover:text-fg"
                     }`}
                   >
-                    {v}
+                    {t.icon}
+                    <span className="truncate">{t.label}</span>
                   </button>
-                ))}
-              </div>
-            ) : null}
+                );
+              })}
+            </div>
             {(level.zones ?? []).length > 0 ? (
               <div className="space-y-0.5">
                 {(level.zones ?? []).map((z, i) => (
@@ -647,7 +637,102 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 ))}
               </div>
             ) : null}
+            {(level.marks ?? []).length > 0 ? (
+              <div className="space-y-0.5">
+                {(level.marks ?? []).map((m) => (
+                  <button
+                    key={`${m.name}-${m.x}-${m.y}`}
+                    type="button"
+                    onClick={() => {
+                      const next = cloneLevel(level);
+                      next.marks = (next.marks ?? []).filter(
+                        (x) => !(x.x === m.x && x.y === m.y),
+                      );
+                      commitEdit(next);
+                    }}
+                    className="flex w-full items-center justify-between rounded px-1 py-0.5 font-mono text-[10px] text-dim hover:bg-surface hover:text-primary"
+                    title="Remove mark"
+                  >
+                    <span>{m.name}</span>
+                    <span>
+                      {m.x},{m.y}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </Section>
+
+          {brush.kind === "thing" ? (
+            <Section title={brushLabel}>
+              {brush.thing === "spawn" ? (
+                <button
+                  type="button"
+                  onClick={rotateSpawn}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-[11px] text-muted hover:bg-surface hover:text-fg"
+                  title="Rotate spawn facing"
+                >
+                  <RotateCcw className="size-3.5" />
+                  Turn spawn
+                </button>
+              ) : null}
+              {nameKind ? (
+                <>
+                  <label className="block text-[11px] text-muted">
+                    Name
+                    <input
+                      value={thingName}
+                      onChange={(e) => setThingName(e.target.value)}
+                      placeholder={namePlaceholder}
+                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                    />
+                  </label>
+                  <p className="text-[10px] leading-snug text-dim">
+                    Leave blank to use {namePlaceholder}.
+                  </p>
+                </>
+              ) : null}
+              {brush.thing === "enemy" ? (
+                <div className="flex gap-1">
+                  {(["grunt", "bruiser"] as const).map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setVariant(v)}
+                      className={`flex-1 rounded-md border px-2 py-1 text-[11px] capitalize ${
+                        variant === v
+                          ? "border-primary bg-primary/15 text-fg"
+                          : "border-border text-muted"
+                      }`}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {brush.thing === "teleport" ? (
+                <label className="block text-[11px] text-muted">
+                  Destination
+                  <input
+                    value={thingDest}
+                    onChange={(e) => setThingDest(e.target.value)}
+                    placeholder="name of the other pad"
+                    className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                  />
+                </label>
+              ) : null}
+              {isZoneBrush(brush) ? (
+                <p className="text-[10px] leading-snug text-dim">
+                  Drag a box to name a region.
+                </p>
+              ) : null}
+              {isMarkBrush(brush) ? (
+                <p className="text-[10px] leading-snug text-dim">
+                  Click one cell to name it.
+                </p>
+              ) : null}
+            </Section>
+          ) : null}
 
           <Section title="Look">
             <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
@@ -724,44 +809,59 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
               const { x, y } = cellFromEvent(e);
               const t = toolRef.current;
-              const zoneBrush =
-                brushRef.current.kind === "thing" &&
-                brushRef.current.thing === "zone";
+              const b = brushRef.current;
               if (t === "eyedrop" || e.altKey) {
                 pickFrom(x, y);
                 return;
               }
-              if (t === "fill" && !zoneBrush) {
+              if (t === "erase") {
+                beginStroke();
+                applyCells([{ x, y }], true);
+                return;
+              }
+              if (isZoneBrush(b)) {
+                const d = { x0: x, y0: y, x1: x, y1: y };
+                dragRef.current = d;
+                setDrag(d);
+                return;
+              }
+              if (isMarkBrush(b)) {
+                stampCells([{ x, y }], false);
+                return;
+              }
+              if (t === "fill") {
                 const cells = floodCells(levelRef.current, x, y);
                 stampCells(cells, false);
                 return;
               }
-              if (t === "rect" || t === "rectFill" || t === "line" || zoneBrush) {
+              if (t === "rect" || t === "rectFill" || t === "line") {
                 const d = { x0: x, y0: y, x1: x, y1: y };
                 dragRef.current = d;
                 setDrag(d);
                 return;
               }
               beginStroke();
-              applyCells([{ x, y }], t === "erase");
-              dragRef.current = { x0: x, y0: y, x1: x, y1: y };
-              setDrag(null);
+              applyCells([{ x, y }], false);
             }}
             onPointerMove={(e) => {
               if (e.buttons === 0) return;
               const { x, y } = cellFromEvent(e);
               const t = toolRef.current;
+              const b = brushRef.current;
               if (t === "eyedrop") {
                 pickFrom(x, y);
                 return;
               }
-              if (
-                t === "rect" ||
-                t === "rectFill" ||
-                t === "line" ||
-                (brushRef.current.kind === "thing" &&
-                  brushRef.current.thing === "zone")
-              ) {
+              if (isZoneBrush(b) && t !== "erase") {
+                const cur = dragRef.current;
+                if (!cur) return;
+                const next = { ...cur, x1: x, y1: y };
+                dragRef.current = next;
+                setDrag(next);
+                return;
+              }
+              if (isMarkBrush(b) && t !== "erase") return;
+              if (t === "rect" || t === "rectFill" || t === "line") {
                 const cur = dragRef.current;
                 if (!cur) return;
                 const next = { ...cur, x1: x, y1: y };
@@ -774,34 +874,33 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
             }}
             onPointerUp={() => {
               const t = toolRef.current;
+              const b = brushRef.current;
               const d = dragRef.current;
               dragRef.current = null;
               setDrag(null);
-              if (d) {
-                const zoneBrush =
-                  brushRef.current.kind === "thing" &&
-                  brushRef.current.thing === "zone";
-                if (zoneBrush) {
-                  const x0 = Math.min(d.x0, d.x1);
-                  const y0 = Math.min(d.y0, d.y1);
-                  const w = Math.abs(d.x1 - d.x0) + 1;
-                  const h = Math.abs(d.y1 - d.y0) + 1;
-                  const name =
-                    nameRef.current.trim() ||
-                    `zone-${(levelRef.current.zones ?? []).length + 1}`;
-                  const next = cloneLevel(levelRef.current);
-                  next.zones = [...(next.zones ?? []), { name, x: x0, y: y0, w, h }];
-                  commitEdit(next);
-                  return;
-                }
-                if (t === "rect" || t === "rectFill" || t === "line") {
-                  const cells =
-                    t === "line"
-                      ? lineCells(d.x0, d.y0, d.x1, d.y1)
-                      : rectCells(d, t === "rect");
-                  stampCells(cells, false);
-                  return;
-                }
+              if (d && isZoneBrush(b) && t !== "erase" && t !== "eyedrop") {
+                const x0 = Math.min(d.x0, d.x1);
+                const y0 = Math.min(d.y0, d.y1);
+                const w = Math.abs(d.x1 - d.x0) + 1;
+                const h = Math.abs(d.y1 - d.y0) + 1;
+                const name = resolveName(
+                  levelRef.current,
+                  "zone",
+                  nameRef.current,
+                );
+                const next = cloneLevel(levelRef.current);
+                next.zones = [...(next.zones ?? []), { name, x: x0, y: y0, w, h }];
+                commitEdit(next);
+                return;
+              }
+              if (d && (t === "rect" || t === "rectFill" || t === "line")) {
+                if (isMarkBrush(b) || isZoneBrush(b)) return;
+                const cells =
+                  t === "line"
+                    ? lineCells(d.x0, d.y0, d.x1, d.y1)
+                    : rectCells(d, t === "rect");
+                stampCells(cells, false);
+                return;
               }
               if (t !== "fill" && t !== "eyedrop") endStroke();
             }}
@@ -852,15 +951,25 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                       </span>
                     )}
                     {ent && (
-                      <span className="absolute inset-0 flex items-center justify-center text-[11px] text-fg">
-                        {ent.type === "enemy" && "☠"}
-                        {ent.type === "ammo" && "▣"}
-                        {ent.type === "health" && "+"}
-                        {ent.type === "exit" && "⎋"}
-                        {ent.type === "door" && "▣"}
-                        {ent.type === "teleport" && "◎"}
-                        {ent.type === "pickup" && "◆"}
-                      </span>
+                      <>
+                        <span className="absolute inset-0 flex items-center justify-center text-[11px] text-fg">
+                          {ent.type === "enemy" && "☠"}
+                          {ent.type === "ammo" && "▣"}
+                          {ent.type === "health" && "+"}
+                          {ent.type === "exit" && "⎋"}
+                          {ent.type === "door" && "▣"}
+                          {ent.type === "teleport" && "◎"}
+                          {ent.type === "pickup" && "◆"}
+                        </span>
+                        {ent.name ? (
+                          <span
+                            title={ent.name}
+                            className="absolute bottom-0 left-0 max-w-full truncate rounded-sm bg-black/70 px-0.5 font-mono text-[8px] leading-tight text-fg"
+                          >
+                            {ent.name}
+                          </span>
+                        ) : null}
+                      </>
                     )}
                   </div>
                 );
@@ -1023,6 +1132,41 @@ function IconBtn({
   );
 }
 
+const NAME_PREFIX: Record<string, string> = {
+  door: "door",
+  teleport: "pad",
+  pickup: "item",
+  enemy: "enemy",
+  ammo: "ammo",
+  health: "health",
+  exit: "exit",
+  zone: "zone",
+  mark: "mark",
+};
+
+function usedNames(level: GameLevel): Set<string> {
+  const names = new Set<string>();
+  for (const e of level.entities) {
+    if (e.name) names.add(e.name);
+  }
+  for (const z of level.zones ?? []) names.add(z.name);
+  for (const m of level.marks ?? []) names.add(m.name);
+  return names;
+}
+
+function autoName(level: GameLevel, kind: string): string {
+  const prefix = NAME_PREFIX[kind] ?? kind;
+  const used = usedNames(level);
+  let n = 1;
+  while (used.has(`${prefix}-${n}`)) n += 1;
+  return `${prefix}-${n}`;
+}
+
+function resolveName(level: GameLevel, kind: string, typed: string): string {
+  const name = typed.trim();
+  return name || autoName(level, kind);
+}
+
 function applyBrushTo(
   level: GameLevel,
   x: number,
@@ -1040,6 +1184,9 @@ function applyBrushTo(
     level.walls[y]![x] = 0;
     removeEntityAt(level, x, y);
     level.marks = (level.marks ?? []).filter((m) => !(m.x === x && m.y === y));
+    level.zones = (level.zones ?? []).filter(
+      (z) => !(x >= z.x && y >= z.y && x < z.x + z.w && y < z.y + z.h),
+    );
     return;
   }
   if (brush.kind === "wall") {
@@ -1051,10 +1198,9 @@ function applyBrushTo(
     return;
   }
   if (brush.thing === "mark") {
-    const name = extra.name.trim() || `mark-${x}-${y}`;
     level.marks = [
       ...(level.marks ?? []).filter((m) => !(m.x === x && m.y === y)),
-      { name, x, y },
+      { name: resolveName(level, "mark", extra.name), x, y },
     ];
     return;
   }
@@ -1068,15 +1214,7 @@ function applyBrushTo(
   if (brush.thing === "exit") {
     level.entities = level.entities.filter((e) => e.type !== "exit");
   }
-  const name =
-    extra.name.trim() ||
-    (brush.thing === "door"
-      ? `door-${x}-${y}`
-      : brush.thing === "pickup"
-        ? `item-${x}-${y}`
-        : brush.thing === "teleport"
-          ? `pad-${x}-${y}`
-          : undefined);
+  const name = resolveName(level, brush.thing, extra.name);
   level.entities.push({
     id: uid(brush.thing.slice(0, 2)),
     type: brush.thing,

@@ -106,9 +106,12 @@ export function ScriptHelp({
           <section className="space-y-1.5">
             <p className="font-medium text-fg">Functions</p>
             <p>
-              A function is a named piece of code.{" "}
+              A function is a named piece of code that you make.{" "}
               <code className="text-fg">(def (announce msg) ...)</code> makes a
               function with the name <code className="text-fg">announce</code>.
+              Then <code className="text-fg">(announce "Find the red key.")</code>{" "}
+              runs that function. <code className="text-fg">announce</code> is
+              not a built-in function.
             </p>
             <p>
               The operators <code className="text-fg">+</code>,{" "}
@@ -331,6 +334,22 @@ export function ScriptHelp({
             <p>
               This sample locks a door. The script opens the door when the
               player takes the key.
+            </p>
+            <p>
+              <code className="text-fg">announce</code> is a function that the
+              sample makes with <code className="text-fg">def</code>.{" "}
+              <code className="text-fg">sprung</code> is a script value.{" "}
+              <code className="text-fg">get</code> and{" "}
+              <code className="text-fg">set</code> read and write that value.
+            </p>
+            <p>
+              <code className="text-fg">door-armory</code>,{" "}
+              <code className="text-fg">key-red</code>,{" "}
+              <code className="text-fg">ambush</code>,{" "}
+              <code className="text-fg">grunt-a</code>,{" "}
+              <code className="text-fg">panel</code>, and{" "}
+              <code className="text-fg">door-exit</code> are names on the map.
+              Those names must match the things in the editor.
             </p>
             <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
               {SAMPLE}
