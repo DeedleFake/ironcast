@@ -86,7 +86,9 @@ export type EditorTool =
   | "rect"
   | "rectFill"
   | "line"
-  | "eyedrop";
+  | "eyedrop"
+  | "zone"
+  | "mark";
 
 export const WALL_TEXTURE_COUNT = 6;
 

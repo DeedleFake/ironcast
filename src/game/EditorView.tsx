@@ -60,6 +60,7 @@ type Props = {
 type ThingKind = "spawn" | EntityType | "zone" | "mark";
 
 type Brush =
+  | { kind: "none" }
   | { kind: "wall"; tex: number }
   | { kind: "thing"; thing: ThingKind };
 
@@ -254,6 +255,21 @@ function sharedOpts(level: GameLevel, sel: SelItem[]): Set<SelOpt> {
   return acc;
 }
 
+function isDrawTool(t: EditorTool) {
+  return (
+    t === "paint" ||
+    t === "fill" ||
+    t === "rect" ||
+    t === "rectFill" ||
+    t === "line"
+  );
+}
+function isMetaTool(t: EditorTool) {
+  return t === "select" || t === "erase" || t === "eyedrop";
+}
+function isAreaTool(t: EditorTool) {
+  return t === "zone" || t === "mark";
+}
 function isZoneBrush(b: Brush) {
   return b.kind === "thing" && b.thing === "zone";
 }
@@ -310,6 +326,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   floorRef.current = emptyFloor;
   const ceilRef = useRef(emptyCeil);
   ceilRef.current = emptyCeil;
+  const lastDrawRef = useRef<EditorTool>("paint");
+  const lastBrushRef = useRef<Brush>({ kind: "wall", tex: 1 });
   const pastRef = useRef<GameLevel[]>([]);
   const futureRef = useRef<GameLevel[]>([]);
   const strokeBaseRef = useRef<GameLevel | null>(null);
@@ -370,6 +388,38 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     setStatus("Redid last change");
   }, [endStroke]);
 
+  const chooseDrawTool = useCallback((t: EditorTool) => {
+    lastDrawRef.current = t;
+    setTool(t);
+    setBrush((b) => {
+      if (b.kind === "none" || isZoneBrush(b) || isMarkBrush(b)) {
+        const last = lastBrushRef.current;
+        return last.kind === "none" || isZoneBrush(last) || isMarkBrush(last)
+          ? { kind: "wall", tex: 1 }
+          : last;
+      }
+      return b;
+    });
+  }, []);
+
+  const chooseMetaTool = useCallback((t: EditorTool) => {
+    setTool(t);
+    setBrush({ kind: "none" });
+  }, []);
+
+  const chooseAreaTool = useCallback((kind: "zone" | "mark") => {
+    setTool(kind);
+    setBrush({ kind: "thing", thing: kind });
+  }, []);
+
+  const chooseBrush = useCallback((b: Brush) => {
+    lastBrushRef.current = b;
+    setBrush(b);
+    setTool((t) =>
+      isMetaTool(t) || isAreaTool(t) ? lastDrawRef.current : t,
+    );
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -406,20 +456,25 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       const nextTool = TOOL_KEY[e.code];
       if (nextTool) {
         e.preventDefault();
-        setTool(nextTool);
+        if (isMetaTool(nextTool)) chooseMetaTool(nextTool);
+        else chooseDrawTool(nextTool);
         return;
       }
       if (e.code.startsWith("Digit")) {
         const n = Number(e.code.slice(5));
-        if (n >= 0 && n <= WALL_TEXTURE_COUNT) {
+        if (n === 0) {
           e.preventDefault();
-          setBrush({ kind: "wall", tex: n });
+          chooseBrush({ kind: "wall", tex: 0 });
+        } else if (n >= 1 && n <= WALL_TEXTURE_COUNT) {
+          e.preventDefault();
+          setWallTex(n);
+          chooseBrush({ kind: "wall", tex: n });
         }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo]);
+  }, [undo, redo, chooseDrawTool, chooseMetaTool, chooseBrush]);
 
   useEffect(() => {
     const wrap = canvasWrap.current;
@@ -486,7 +541,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     const L = levelRef.current;
     if (x < 0 || y < 0 || x >= L.width || y >= L.height) return;
     if (Math.floor(L.spawn.x) === x && Math.floor(L.spawn.y) === y) {
-      setBrush({ kind: "thing", thing: "spawn" });
+      chooseBrush({ kind: "thing", thing: "spawn" });
       setStatus("Picked spawn");
       return;
     }
@@ -494,7 +549,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       (e) => Math.floor(e.x) === x && Math.floor(e.y) === y,
     );
     if (ent) {
-      setBrush({ kind: "thing", thing: ent.type });
+      chooseBrush({ kind: "thing", thing: ent.type });
       setThingName(ent.name || "");
       setThingDest(ent.dest || "");
       setVariant(ent.variant === "bruiser" ? "bruiser" : "grunt");
@@ -503,21 +558,21 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     }
     const mark = (L.marks ?? []).find((m) => m.x === x && m.y === y);
     if (mark) {
-      setBrush({ kind: "thing", thing: "mark" });
+      chooseAreaTool("mark");
       setThingName(mark.name);
       setStatus(`Picked mark ${mark.name}`);
       return;
     }
     const tex = L.walls[y]![x] ?? 0;
-    setBrush({ kind: "wall", tex });
     if (tex === 0) {
       setEmptyFloor(L.floors[y]?.[x] ?? DEFAULT_FLOOR);
       setEmptyCeil(L.ceils[y]?.[x] ?? DEFAULT_CEIL);
     } else {
       setWallTex(tex);
     }
+    chooseBrush({ kind: "wall", tex });
     setStatus(`Picked ${tex === 0 ? "Empty" : (WALL_NAMES[tex] ?? "wall")}`);
-  }, []);
+  }, [chooseBrush, chooseAreaTool]);
 
   const cellFromEvent = (e: React.MouseEvent | React.PointerEvent) => {
     const target = e.currentTarget as HTMLElement;
@@ -541,9 +596,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const previewCells = useMemo(() => {
     if (!drag) return [];
     if (tool === "select") return rectCells(drag, false);
-    const zonePaint =
-      tool !== "erase" && tool !== "eyedrop" && isZoneBrush(brush);
-    if (zonePaint) return rectCells(drag, true);
+    if (tool === "zone" || isZoneBrush(brush)) return rectCells(drag, true);
+    if (tool === "rect") return rectCells(drag, true);
     if (tool === "rectFill") return rectCells(drag, false);
     if (tool === "line") return lineCells(drag.x0, drag.y0, drag.x1, drag.y1);
     return [];
@@ -581,12 +635,17 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   };
 
   const brushLabel =
-    brush.kind === "wall"
-      ? brush.tex === 0
-        ? "Empty"
-        : "Wall"
-      : [...THINGS, ...AREAS].find((t) => t.id === brush.thing)?.label ?? "Thing";
-  const toolLabel = ALL_TOOLS.find((t) => t.id === tool)?.label ?? tool;
+    brush.kind === "none"
+      ? ""
+      : brush.kind === "wall"
+        ? brush.tex === 0
+          ? "Empty"
+          : "Wall"
+        : [...THINGS, ...AREAS].find((t) => t.id === brush.thing)?.label ?? "Thing";
+  const toolLabel =
+    ALL_TOOLS.find((t) => t.id === tool)?.label ??
+    AREAS.find((t) => t.id === tool)?.label ??
+    tool;
   const nameKind =
     brush.kind === "thing" && brush.thing !== "spawn" ? brush.thing : null;
   const namePlaceholder = nameKind ? autoName(level, nameKind) : "name";
@@ -736,7 +795,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     key={t.id}
                     tool={t}
                     active={tool === t.id}
-                    onClick={() => setTool(t.id)}
+                    onClick={() => chooseDrawTool(t.id)}
                   />
                 ))}
               </div>
@@ -749,7 +808,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     key={t.id}
                     type="button"
                     title={`${t.label} (${t.hint})`}
-                    onClick={() => setTool(t.id)}
+                    onClick={() => chooseMetaTool(t.id)}
                     className={`flex items-center justify-center gap-1.5 rounded-md px-2 py-2 text-[11px] transition-colors ${
                       tool === t.id
                         ? "bg-primary/20 text-primary"
@@ -763,73 +822,15 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               </div>
             </Section>
 
-            <Section title="Walls">
-              <div className="grid grid-cols-2 gap-1">
-                <button
-                  type="button"
-                  onClick={() => setBrush({ kind: "wall", tex: 0 })}
-                  className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                    brush.kind === "wall" && brush.tex === 0
-                      ? "border-primary bg-primary/15 text-fg"
-                      : "border-transparent text-muted hover:border-border hover:text-fg"
-                  }`}
-                >
-                  <span
-                    className="size-4 shrink-0 rounded-sm border border-black/40"
-                    style={{ background: hexFromColor(emptyFloor) }}
-                  />
-                  <span className="truncate">Empty</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setBrush({ kind: "wall", tex: wallTex })}
-                  className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                    brush.kind === "wall" && brush.tex > 0
-                      ? "border-primary bg-primary/15 text-fg"
-                      : "border-transparent text-muted hover:border-border hover:text-fg"
-                  }`}
-                >
-                  <span
-                    className="size-4 shrink-0 rounded-sm border border-black/40"
-                    style={{ background: TEX_COLORS[wallTex] ?? TEX_COLORS[1] }}
-                  />
-                  <span className="truncate">Wall</span>
-                </button>
-              </div>
-            </Section>
-
-            <Section title="Things">
-              <div className="grid grid-cols-2 gap-1">
-                {THINGS.map((t) => {
-                  const active = brush.kind === "thing" && brush.thing === t.id;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => setBrush({ kind: "thing", thing: t.id })}
-                      className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                        active
-                          ? "border-primary bg-primary/15 text-fg"
-                          : "border-transparent text-muted hover:border-border hover:text-fg"
-                      }`}
-                    >
-                      {t.icon}
-                      <span className="truncate">{t.label}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </Section>
-
             <Section title="Areas">
               <div className="grid grid-cols-2 gap-1">
                 {AREAS.map((t) => {
-                  const active = brush.kind === "thing" && brush.thing === t.id;
+                  const active = tool === t.id;
                   return (
                     <button
                       key={t.id}
                       type="button"
-                      onClick={() => setBrush({ kind: "thing", thing: t.id })}
+                      onClick={() => chooseAreaTool(t.id)}
                       className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
                         active
                           ? "border-primary bg-primary/15 text-fg"
@@ -888,6 +889,64 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   ))}
                 </div>
               ) : null}
+            </Section>
+
+            <Section title="Walls">
+              <div className="grid grid-cols-2 gap-1">
+                <button
+                  type="button"
+                  onClick={() => chooseBrush({ kind: "wall", tex: 0 })}
+                  className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                    brush.kind === "wall" && brush.tex === 0
+                      ? "border-primary bg-primary/15 text-fg"
+                      : "border-transparent text-muted hover:border-border hover:text-fg"
+                  }`}
+                >
+                  <span
+                    className="size-4 shrink-0 rounded-sm border border-black/40"
+                    style={{ background: hexFromColor(emptyFloor) }}
+                  />
+                  <span className="truncate">Empty</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => chooseBrush({ kind: "wall", tex: wallTex })}
+                  className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                    brush.kind === "wall" && brush.tex > 0
+                      ? "border-primary bg-primary/15 text-fg"
+                      : "border-transparent text-muted hover:border-border hover:text-fg"
+                  }`}
+                >
+                  <span
+                    className="size-4 shrink-0 rounded-sm border border-black/40"
+                    style={{ background: TEX_COLORS[wallTex] ?? TEX_COLORS[1] }}
+                  />
+                  <span className="truncate">Wall</span>
+                </button>
+              </div>
+            </Section>
+
+            <Section title="Things">
+              <div className="grid grid-cols-2 gap-1">
+                {THINGS.map((t) => {
+                  const active = brush.kind === "thing" && brush.thing === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => chooseBrush({ kind: "thing", thing: t.id })}
+                      className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
+                        active
+                          ? "border-primary bg-primary/15 text-fg"
+                          : "border-transparent text-muted hover:border-border hover:text-fg"
+                      }`}
+                    >
+                      {t.icon}
+                      <span className="truncate">{t.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </Section>
           </div>
 
@@ -952,7 +1011,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           if (ent) ent.dest = dest;
                         });
                       }}
-                      placeholder="name of the other pad"
+                      placeholder="name of a mark"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -1150,7 +1209,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           type="button"
                           onClick={() => {
                             setWallTex(tex);
-                            setBrush({ kind: "wall", tex });
+                            chooseBrush({ kind: "wall", tex });
                           }}
                           className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
                             active
@@ -1219,7 +1278,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     <input
                       value={thingDest}
                       onChange={(e) => setThingDest(e.target.value)}
-                      placeholder="name of the other pad"
+                      placeholder="name of a mark"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -1629,7 +1688,11 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
             ? liveSel.length
               ? `Select · ${liveSel.length} selected · Shift adds`
               : "Select · click or drag a box · Shift adds"
-            : `${toolLabel} · ${brushLabel}`}
+            : isAreaTool(tool)
+              ? toolLabel
+              : brushLabel
+                ? `${toolLabel} · ${brushLabel}`
+                : toolLabel}
         </span>
         <span className="min-w-0 truncate text-accent">{status}</span>
         <span className="hidden sm:inline">Right-click erases · Alt-click picks</span>
@@ -1772,6 +1835,7 @@ function applyBrushTo(
     );
     return;
   }
+  if (brush.kind === "none") return;
   if (brush.kind === "wall") {
     const isSpawn =
       Math.floor(level.spawn.x) === x && Math.floor(level.spawn.y) === y;
