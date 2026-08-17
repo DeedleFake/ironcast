@@ -822,8 +822,9 @@ function Commands() {
         </p>
         <p>
           <Code>id:</Code> is a string. <Code>str</Code> makes an id. If
-          the id is missing, the thing has no id. The script cannot refer to
-          it.
+          the id is missing, <Code>spawn</Code> makes one like{" "}
+          <Code>enemy-1</Code> and returns it. Store that string if you
+          want to talk to the new thing later.
         </p>
       </Block>
       <Block>

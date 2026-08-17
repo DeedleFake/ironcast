@@ -246,6 +246,22 @@ function closedDoorAt(state: GameState, ix: number, iy: number): LiveEntity | nu
   return null;
 }
 
+function usedIds(state: GameState): Set<string> {
+  const used = new Set<string>();
+  for (const e of state.entities) if (e.id) used.add(e.id);
+  for (const z of state.level.zones ?? []) if (z.id) used.add(z.id);
+  for (const m of state.level.marks ?? []) if (m.id) used.add(m.id);
+  return used;
+}
+
+function nextSpawnId(state: GameState, type: string): string {
+  const used = usedIds(state);
+  const base = type.trim() || "thing";
+  let n = 1;
+  while (used.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}
+
 function findNamed(state: GameState, name: string): LiveEntity | undefined {
   if (!name) return undefined;
   return state.entities.find((e) => e.alive && e.id === name);
@@ -799,11 +815,11 @@ function makeHost(state: GameState): Host {
         } else if (named) {
           x = named.x;
           y = named.y;
-        } else return "";
+        } else return null;
       }
-      if (x === undefined || y === undefined) return "";
+      if (x === undefined || y === undefined) return null;
       const key = uid("k");
-      const publicId = opts.id?.trim() || undefined;
+      const publicId = opts.id?.trim() || nextSpawnId(state, opts.type);
       const ent = liveFromLevel({
         key,
         id: publicId,
@@ -818,7 +834,7 @@ function makeHost(state: GameState): Host {
       });
       if (ent.type === "enemy") state.totalEnemies += 1;
       state.entities.push(ent);
-      return publicId ?? "";
+      return publicId;
     },
     remove: (name) => {
       const e = findNamed(state, name);

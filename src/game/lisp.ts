@@ -2,7 +2,7 @@
 
 import { texFromWallName } from "./types";
 
-export type LispVal =
+export type LispVal = (
   | { k: "num"; v: number }
   | { k: "str"; v: string }
   | { k: "bool"; v: boolean }
@@ -10,7 +10,8 @@ export type LispVal =
   | { k: "sym"; v: string }
   | { k: "list"; v: LispVal[] }
   | { k: "comment"; v: string }
-  | { k: "fn"; clauses: Clause[]; keys: string[]; env: Env };
+  | { k: "fn"; clauses: Clause[]; keys: string[]; env: Env }
+) & { cmt?: string };
 
 export type Pattern =
   | { k: "bind"; name: string }
@@ -265,10 +266,24 @@ function skip(p: { s: string; i: number }) {
   while (p.i < p.s.length && " \t\n\r".includes(p.s[p.i]!)) p.i++;
 }
 
+function skipH(p: { s: string; i: number }) {
+  while (p.i < p.s.length && (p.s[p.i] === " " || p.s[p.i] === "\t")) p.i++;
+}
+
 function readComment(p: { s: string; i: number }): LispVal {
   const start = p.i;
   while (p.i < p.s.length && p.s[p.i] !== "\n") p.i++;
   return { k: "comment", v: p.s.slice(start, p.i) };
+}
+
+function attachTrail(p: { s: string; i: number }, v: LispVal): LispVal {
+  if (v.k === "comment") return v;
+  skipH(p);
+  if (p.s[p.i] !== ";") return v;
+  const start = p.i;
+  while (p.i < p.s.length && p.s[p.i] !== "\n") p.i++;
+  v.cmt = p.s.slice(start, p.i);
+  return v;
 }
 
 function read(p: { s: string; i: number }): LispVal {
@@ -288,7 +303,7 @@ function read(p: { s: string; i: number }): LispVal {
       }
       xs.push(read(p));
     }
-    return list(xs);
+    return attachTrail(p, list(xs));
   }
   if (c === ")") throw new LispError("unexpected )");
   if (c === "'") throw new LispError("unexpected '");
@@ -299,7 +314,7 @@ function read(p: { s: string; i: number }): LispVal {
       const ch = p.s[p.i]!;
       if (ch === '"') {
         p.i++;
-        return str(out);
+        return attachTrail(p, str(out));
       }
       if (ch === "\\" && p.i + 1 < p.s.length) {
         const n = p.s[p.i + 1]!;
@@ -316,12 +331,12 @@ function read(p: { s: string; i: number }): LispVal {
   while (j < p.s.length && !" \t\n\r();".includes(p.s[j]!)) j++;
   const word = p.s.slice(p.i, j);
   p.i = j;
-  if (word === "true") return bool(true);
-  if (word === "false") return bool(false);
-  if (word === "nil") return nil();
-  if (/^[+-]?\d+(\.\d+)?$/.test(word)) return num(Number(word));
+  if (word === "true") return attachTrail(p, bool(true));
+  if (word === "false") return attachTrail(p, bool(false));
+  if (word === "nil") return attachTrail(p, nil());
+  if (/^[+-]?\d+(\.\d+)?$/.test(word)) return attachTrail(p, num(Number(word)));
   if (!word) throw new LispError("empty token");
-  return sym(word);
+  return attachTrail(p, sym(word));
 }
 
 export function formatLisp(src: string): { ok: true; text: string } | { ok: false; error: string } {
@@ -404,30 +419,41 @@ function parseIfArgs(args: LispVal[]): IfClause[] {
   return clauses;
 }
 
-function containsComment(v: LispVal): boolean {
+function hasBreakComment(v: LispVal): boolean {
   if (v.k === "comment") return true;
-  if (v.k === "list") return v.v.some(containsComment);
-  return false;
+  if (v.k !== "list") return false;
+  return v.v.some((x, i) => {
+    if (x.k === "comment") return true;
+    if (x.cmt && i < v.v.length - 1) return true;
+    return hasBreakComment(x);
+  });
+}
+
+function suffixCmt(v: LispVal, text: string): string {
+  return v.cmt ? `${text} ${v.cmt}` : text;
 }
 
 function formatVal(v: LispVal, indent: number): string {
   if (v.k === "comment") return v.v;
   if (v.k !== "list") return formatAtom(v);
-  if (v.v.length === 0) return "()";
+  if (v.v.length === 0) return suffixCmt(v, "()");
   const headName = v.v[0]?.k === "sym" ? v.v[0].v : "";
-  if (containsComment(v)) return formatBlock(v, indent);
+  if (hasBreakComment(v) || BODY_SPECIALS.has(headName)) {
+    return suffixCmt(v, formatBlock(v, indent));
+  }
   const inline = formatInline(v);
   const col = indent * 2;
-  if (!BODY_SPECIALS.has(headName) && inline.length + col <= MAX_INLINE) {
-    return inline;
-  }
-  return formatBlock(v, indent);
+  if (inline.length + col <= MAX_INLINE) return inline;
+  return suffixCmt(v, formatBlock(v, indent));
 }
 
 /** Close parens hang off the last form — never on their own line. */
 function closeOn(lines: string[]): string {
   if (!lines.length) return ")";
-  lines[lines.length - 1] += ")";
+  const last = lines[lines.length - 1]!;
+  const cmt = last.search(/ ;/);
+  if (cmt >= 0) lines[lines.length - 1] = last.slice(0, cmt) + ")" + last.slice(cmt);
+  else lines[lines.length - 1] = last + ")";
   return lines.join("\n");
 }
 
@@ -578,10 +604,23 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
 
 function formatInline(v: LispVal): string {
   if (v.k !== "list") return formatAtom(v);
-  return `(${v.v.map(formatInline).join(" ")})`;
+  if (!v.v.length) return suffixCmt(v, "()");
+  const last = v.v[v.v.length - 1]!;
+  const parts = v.v.map((x, i) =>
+    i === v.v.length - 1 ? formatCore(x) : formatInline(x),
+  );
+  let text = `(${parts.join(" ")})`;
+  if (last.cmt) text += ` ${last.cmt}`;
+  return suffixCmt(v, text);
 }
 
-function formatAtom(v: LispVal): string {
+function formatCore(v: LispVal): string {
+  if (v.k === "comment") return v.v;
+  if (v.k === "list") return formatInline(v);
+  return formatAtomCore(v);
+}
+
+function formatAtomCore(v: LispVal): string {
   switch (v.k) {
     case "nil":
       return "nil";
@@ -600,6 +639,10 @@ function formatAtom(v: LispVal): string {
     case "list":
       return formatInline(v);
   }
+}
+
+function formatAtom(v: LispVal): string {
+  return suffixCmt(v, formatAtomCore(v));
 }
 
 export type SetWallOpts = {
@@ -637,7 +680,7 @@ export type Host = {
     label?: string;
     color?: number;
     locked?: boolean;
-  }) => string;
+  }) => string | null;
   remove: (name: string) => boolean;
   teleport: (who: string, dest: LispVal, y?: LispVal) => boolean;
   win: () => void;
@@ -1352,7 +1395,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         color: color ? asColor(color, "color") : undefined,
         locked: locked ? truthy(locked) : undefined,
       });
-      if (!made) throw new LispError("spawn at: not found");
+      if (made === null) throw new LispError("spawn at: not found");
       return str(made);
     }
     case "remove":
