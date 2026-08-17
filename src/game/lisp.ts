@@ -1,5 +1,7 @@
 /** Tiny event Lisp: parse, format, highlight, evaluate. */
 
+import { texFromWallName } from "./types";
+
 export type LispVal =
   | { k: "num"; v: number }
   | { k: "str"; v: string }
@@ -138,6 +140,21 @@ export function asNum(v: LispVal, ctx: string): number {
 export function asName(v: LispVal): string {
   if (v.k === "sym" || v.k === "str") return v.v;
   throw new LispError("expected a name");
+}
+
+export function asColor(v: LispVal, ctx: string): number {
+  if (v.k === "num") return (v.v | 0) & 0xffffff;
+  if (v.k !== "str") throw new LispError(`${ctx} needs a color like "#rrggbb"`);
+  const t = v.v.trim();
+  const hex = t.startsWith("#") ? t : `#${t}`;
+  if (/^#[0-9a-f]{6}$/i.test(hex)) return Number.parseInt(hex.slice(1), 16);
+  if (/^#[0-9a-f]{3}$/i.test(hex)) {
+    const r = hex[1]!;
+    const g = hex[2]!;
+    const b = hex[3]!;
+    return Number.parseInt(r + r + g + g + b + b, 16);
+  }
+  throw new LispError(`${ctx} needs a color like "#rrggbb"`);
 }
 
 export function printVal(v: LispVal): string {
@@ -559,6 +576,16 @@ function formatAtom(v: LispVal): string {
   }
 }
 
+export type SetWallOpts = {
+  at?: string;
+  x?: number;
+  y?: number;
+  type?: string;
+  color?: number;
+  floor?: number;
+  ceiling?: number;
+};
+
 export type Host = {
   say: (msg: string) => void;
   give: (what: string, n?: number) => boolean;
@@ -572,8 +599,15 @@ export type Host = {
   unlock: (name: string) => boolean;
   isLocked: (name: string) => boolean;
   isOpen: (name: string) => boolean;
-  setWall: (a: LispVal, b?: LispVal, c?: LispVal) => boolean;
-  spawn: (type: string, x: number, y: number, name?: string, variant?: string) => string;
+  setWall: (opts: SetWallOpts) => boolean;
+  spawn: (opts: {
+    type: string;
+    at?: string;
+    x?: number;
+    y?: number;
+    name?: string;
+    variant?: string;
+  }) => string;
   remove: (name: string) => boolean;
   teleport: (who: string, dest: LispVal, y?: LispVal) => boolean;
   win: () => void;
@@ -894,7 +928,7 @@ function posArgs(name: string, call: CallParts): LispVal[] {
 
 function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
   const h = ctx.host;
-  const args = name === "spawn" ? call.pos : posArgs(name, call);
+  const args = name === "spawn" || name === "set-wall" ? call.pos : posArgs(name, call);
   const nums = () => args.map((a) => asNum(a, name));
   switch (name) {
     case "+":
@@ -1016,32 +1050,63 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       return bool(h.isLocked(asName(args[0] ?? nil())));
     case "open?":
       return bool(h.isOpen(asName(args[0] ?? nil())));
-    case "set-wall":
-      return bool(h.setWall(args[0] ?? nil(), args[1], args[2]));
-    case "spawn": {
+    case "set-wall": {
       if (call.pos.length) {
-        throw new LispError("spawn needs type: x: y:");
+        throw new LispError("set-wall needs keys");
       }
+      const allowed = ["at", "x", "y", "type", "color", "floor", "ceiling"];
       for (const key of call.keys.keys()) {
-        if (!["type", "x", "y", "name", "variant"].includes(key)) {
-          throw new LispError(`unknown ${key}:`);
-        }
+        if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
       }
-      const type = call.keys.get("type");
+      const at = call.keys.get("at");
       const x = call.keys.get("x");
       const y = call.keys.get("y");
-      if (!type || !x || !y) throw new LispError("spawn needs type: x: y:");
+      if (!at && (!x || !y)) throw new LispError("set-wall needs at: or x: y:");
+      const type = call.keys.get("type");
+      if (type && texFromWallName(asName(type)) === null) {
+        throw new LispError(`unknown type: ${asName(type)}`);
+      }
+      const color = call.keys.get("color");
+      const floor = call.keys.get("floor");
+      const ceiling = call.keys.get("ceiling");
+      return bool(
+        h.setWall({
+          at: at ? asName(at) : undefined,
+          x: x ? asNum(x, "set-wall") : undefined,
+          y: y ? asNum(y, "set-wall") : undefined,
+          type: type ? asName(type) : undefined,
+          color: color ? asColor(color, "color") : undefined,
+          floor: floor ? asColor(floor, "floor") : undefined,
+          ceiling: ceiling ? asColor(ceiling, "ceiling") : undefined,
+        }),
+      );
+    }
+    case "spawn": {
+      if (call.pos.length) {
+        throw new LispError("spawn needs keys");
+      }
+      const allowed = ["type", "at", "x", "y", "name", "variant"];
+      for (const key of call.keys.keys()) {
+        if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
+      }
+      const type = call.keys.get("type");
+      const at = call.keys.get("at");
+      const x = call.keys.get("x");
+      const y = call.keys.get("y");
+      if (!type) throw new LispError("spawn needs type:");
+      if (!at && (!x || !y)) throw new LispError("spawn needs at: or x: y:");
       const nm = call.keys.get("name");
       const variant = call.keys.get("variant");
-      return str(
-        h.spawn(
-          asName(type),
-          asNum(x, "spawn"),
-          asNum(y, "spawn"),
-          nm ? asName(nm) : undefined,
-          variant ? asName(variant) : undefined,
-        ),
-      );
+      const made = h.spawn({
+        type: asName(type),
+        at: at ? asName(at) : undefined,
+        x: x ? asNum(x, "spawn") : undefined,
+        y: y ? asNum(y, "spawn") : undefined,
+        name: nm ? asName(nm) : undefined,
+        variant: variant ? asName(variant) : undefined,
+      });
+      if (!made) throw new LispError("spawn at: not found");
+      return str(made);
     }
     case "remove":
       return bool(h.remove(asName(args[0] ?? nil())));

@@ -112,6 +112,22 @@ export const WALL_NAMES = [
   "Hazard",
 ] as const;
 
+export const WALL_IDS = [
+  "empty",
+  "tech-panel",
+  "blood-brick",
+  "rust-metal",
+  "circuit",
+  "stone",
+  "hazard",
+] as const;
+
+export function texFromWallName(name: string): number | null {
+  const n = name.trim().toLowerCase().replace(/[\s_]+/g, "-");
+  const i = (WALL_IDS as readonly string[]).indexOf(n);
+  return i >= 0 ? i : null;
+}
+
 export const WALL_DEFAULT_COLORS = [
   0,
   0x4a5568,

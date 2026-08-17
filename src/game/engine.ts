@@ -4,7 +4,7 @@
  */
 
 import type { EnemyVariant, GameLevel, LevelEntity } from "./types";
-import { cloneLevel, DEFAULT_PICKUP, defaultWallColor, hexFromColor, seedWallColors, uid } from "./types";
+import { cloneLevel, colorGrid, DEFAULT_CEIL, DEFAULT_FLOOR, DEFAULT_PICKUP, defaultWallColor, hexFromColor, seedWallColors, texFromWallName, uid } from "./types";
 import {
   getTextures,
   labeledPickup,
@@ -224,6 +224,10 @@ function findNamed(state: GameState, name: string): LiveEntity | undefined {
 
 function findMark(state: GameState, name: string) {
   return (state.level.marks ?? []).find((m) => m.name === name);
+}
+
+function findZone(state: GameState, name: string) {
+  return (state.level.zones ?? []).find((z) => z.name === name);
 }
 
 function blocked(state: GameState, x: number, y: number): boolean {
@@ -701,50 +705,85 @@ function makeHost(state: GameState): Host {
     unlock: (name) => setDoor(name, { locked: false }),
     isLocked: (name) => !!findNamed(state, name)?.locked,
     isOpen: (name) => !!findNamed(state, name)?.open,
-    setWall: (a, b, c) => {
-      let x: number, y: number, tex: number;
-      if (a.k === "sym" || a.k === "str") {
-        const mark = findMark(state, a.v);
-        const door = findNamed(state, a.v);
+    setWall: (opts) => {
+      const cells: { x: number; y: number }[] = [];
+      if (opts.at) {
+        const mark = findMark(state, opts.at);
+        const door = findNamed(state, opts.at);
+        const zone = findZone(state, opts.at);
         if (mark) {
-          x = mark.x;
-          y = mark.y;
+          cells.push({ x: mark.x, y: mark.y });
         } else if (door) {
-          x = Math.floor(door.x);
-          y = Math.floor(door.y);
+          cells.push({ x: Math.floor(door.x), y: Math.floor(door.y) });
+        } else if (zone) {
+          const x1 = Math.min(state.level.width, zone.x + zone.w);
+          const y1 = Math.min(state.level.height, zone.y + zone.h);
+          for (let y = Math.max(0, zone.y); y < y1; y++) {
+            for (let x = Math.max(0, zone.x); x < x1; x++) {
+              cells.push({ x, y });
+            }
+          }
         } else return false;
-        tex = b && b.k === "num" ? b.v : 0;
-      } else if (a.k === "num" && b?.k === "num") {
-        x = Math.floor(a.v);
-        y = Math.floor(b.v);
-        tex = c && c.k === "num" ? c.v : 0;
+      } else if (opts.x !== undefined && opts.y !== undefined) {
+        cells.push({ x: Math.floor(opts.x), y: Math.floor(opts.y) });
       } else return false;
-      if (y < 0 || x < 0 || y >= state.level.height || x >= state.level.width) {
-        return false;
+      if (!cells.length) return false;
+      const level = state.level;
+      if (!level.floors) level.floors = colorGrid(level.width, level.height, DEFAULT_FLOOR);
+      if (!level.ceils) level.ceils = colorGrid(level.width, level.height, DEFAULT_CEIL);
+      if (!level.wallColors) level.wallColors = seedWallColors(level.walls);
+      let tex: number | undefined;
+      if (opts.type !== undefined) {
+        const parsed = texFromWallName(opts.type);
+        if (parsed === null) return false;
+        tex = parsed;
       }
-      state.level.walls[y]![x] = Math.max(0, Math.min(6, tex | 0));
-      if (!state.level.wallColors) {
-        state.level.wallColors = seedWallColors(state.level.walls);
+      let any = false;
+      for (const { x, y } of cells) {
+        if (y < 0 || x < 0 || y >= level.height || x >= level.width) continue;
+        if (tex !== undefined) {
+          level.walls[y]![x] = tex;
+          if (tex > 0) {
+            level.wallColors[y]![x] = opts.color ?? defaultWallColor(tex);
+          } else {
+            level.wallColors[y]![x] = 0;
+          }
+        } else if (opts.color !== undefined) {
+          level.wallColors[y]![x] = opts.color;
+        }
+        if (opts.floor !== undefined) level.floors[y]![x] = opts.floor;
+        if (opts.ceiling !== undefined) level.ceils[y]![x] = opts.ceiling;
+        any = true;
       }
-      const nextTex = state.level.walls[y]![x]!;
-      if (nextTex > 0 && !(state.level.wallColors[y]?.[x] ?? 0)) {
-        state.level.wallColors[y]![x] = defaultWallColor(nextTex);
-      }
-      return true;
+      return any;
     },
-    spawn: (type, x, y, name, variant) => {
-      const id = uid(type.slice(0, 2));
+    spawn: (opts) => {
+      let x = opts.x;
+      let y = opts.y;
+      if (opts.at) {
+        const mark = findMark(state, opts.at);
+        const named = findNamed(state, opts.at);
+        if (mark) {
+          x = mark.x + 0.5;
+          y = mark.y + 0.5;
+        } else if (named) {
+          x = named.x;
+          y = named.y;
+        } else return "";
+      }
+      if (x === undefined || y === undefined) return "";
+      const id = uid(opts.type.slice(0, 2));
       const ent = liveFromLevel({
         id,
-        type: type as LevelEntity["type"],
+        type: opts.type as LevelEntity["type"],
         x,
         y,
-        name: name || id,
-        variant: variant === "bruiser" ? "bruiser" : "grunt",
+        name: opts.name || id,
+        variant: opts.variant === "bruiser" ? "bruiser" : "grunt",
       });
       if (ent.type === "enemy") state.totalEnemies += 1;
       state.entities.push(ent);
-      return name || id;
+      return opts.name || id;
     },
     remove: (name) => {
       const e = findNamed(state, name);

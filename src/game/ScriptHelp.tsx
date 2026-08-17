@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { formatLisp } from "./lisp";
 
-const SAMPLE = `(def announce (msg)
+const SAMPLE_SRC = `(def announce (msg)
   (say (str ">> " msg)))
 
 (on start ()
@@ -33,9 +34,14 @@ const SAMPLE = `(def announce (msg)
 
 (on shoot (target:)
   (if (= target "panel")
-    (set-wall target 0)
+    (set-wall at: target type: "empty")
     (give "ammo" 20)))
 `;
+
+const SAMPLE = (() => {
+  const r = formatLisp(SAMPLE_SRC);
+  return r.ok ? r.text : SAMPLE_SRC;
+})();
 
 const TABS = [
   "Intro",
@@ -133,16 +139,16 @@ function Intro() {
       <Block>
         <H>What a script is</H>
         <p>
-          Each map has one script. The game reads the whole script when the
-          fight starts.
+          Each map has one script. The game reads the full script at the start
+          of the fight.
         </p>
         <p>
-          A form that is not <Code>(on ...)</Code> runs at that time. Those
-          forms usually define functions and set values.
+          A form that is not <Code>(on ...)</Code> starts at that time. Those
+          forms define functions. Those forms also set values.
         </p>
         <p>
-          An <Code>(on ...)</Code> form does not run at load. The game stores
-          the body. The game runs that body when the event occurs.
+          An <Code>(on ...)</Code> form does not start at load. The game stores
+          the body. The game starts that body when the event occurs.
         </p>
         <p>
           A name on the map is a string in the script. The string must match
@@ -158,8 +164,7 @@ function Intro() {
             uses.
           </li>
           <li>
-            Write <Code>(on event (args) ...)</Code> forms for the events that
-            you want.
+            Write <Code>(on event (args) ...)</Code> forms for the events.
           </li>
           <li>Click Format to rewrite the script with a standard layout.</li>
         </ol>
@@ -168,25 +173,25 @@ function Intro() {
         <H>Limits</H>
         <p>
           A step is one evaluation of a form. A name lookup is a step. A
-          number is a step. A function call is a step, and each argument is a
-          step too.
+          number is a step. A function call is a step. Each argument is also a
+          step.
         </p>
         <p>
-          The limit is 8000 steps. A run that hits the limit stops. The
+          The limit is 8000 steps. A count that hits the limit stops. The
           message is <Code>script ran too long</Code>.
         </p>
         <p>
-          The count starts at 8000 when the fight starts, for every top-level
-          form that is not an <Code>on</Code> handler.
+          The count starts at 8000 at the start of the fight. That count is
+          for every top-level form that is not an <Code>on</Code> handler.
         </p>
         <p>
-          The count starts at 8000 again each time one <Code>on</Code> handler
-          runs. Two handlers for the same event each get their own 8000
-          steps.
+          The count starts at 8000 again for each <Code>on</Code> handler. Two
+          handlers for the same event each get 8000 steps.
         </p>
         <p>
-          <Code>after</Code> does not start a new count. It uses the steps
-          that remain from the handler that queued it.
+          <Code>after</Code> does not start a new count.{" "}
+          <Code>after</Code> uses the steps that remain from the handler that
+          set the timer.
         </p>
         <p>
           <Code>(on ...)</Code> is valid only at the top of the file. A nested{" "}
@@ -208,7 +213,7 @@ function Types() {
         <H>Number</H>
         <p>
           <Code>12</Code>, <Code>14.5</Code>, and <Code>-3</Code> are numbers.
-          A number is a count, a position, or a delay.
+          A number is a count. A number is also a position or a delay.
         </p>
         <p>
           The script does not read hex values such as <Code>0xaa46c8</Code> as
@@ -247,11 +252,11 @@ function Types() {
         <H>Name</H>
         <p>
           A thing name is a string. <Code>"door-armory"</Code> is the
-          door with that name. You can build a name with{" "}
-          <Code>(str "enemy-" n)</Code>.
+          door with that name. <Code>(str "enemy-" n)</Code> makes a
+          name.
         </p>
         <p>
-          A word such as <Code>zone</Code> is a variable. The word must have a
+          A word such as <Code>zone</Code> is a variable. The word needs a
           value. An unknown word is an error.
         </p>
       </Block>
@@ -259,8 +264,7 @@ function Types() {
         <H>Function</H>
         <p>
           A function is a piece of code with a parameter list.{" "}
-          <Code>def</Code> and <Code>fn</Code> make functions. There is no
-          function literal in the file besides those forms.
+          <Code>def</Code> and <Code>fn</Code> make functions.
         </p>
       </Block>
       <Block>
@@ -295,14 +299,13 @@ function Syntax() {
           function or the keyword. The other items are arguments.
         </p>
         <p>
-          A comma is not a separator. If you write a comma, the comma is part
-          of a name.
+          A comma is not a separator. A comma is part of a name.
         </p>
       </Block>
       <Block>
         <H>Number literals</H>
         <p>
-          A number is digits, with an optional sign and an optional fraction.{" "}
+          A number is digits. A sign is optional. A fraction is optional.{" "}
           <Code>12</Code>, <Code>+4</Code>, <Code>-3</Code>, and{" "}
           <Code>14.5</Code> are valid. <Code>14.</Code> is not valid.
         </p>
@@ -322,10 +325,10 @@ function Syntax() {
           words. They are not strings.
         </p>
         <p>
-          Any other word is a variable name. A name can hold letters, digits,{" "}
-          <Code>-</Code>, <Code>?</Code>, and other marks. The word must be
-          bound by <Code>def</Code>, <Code>let</Code>, a function parameter, or
-          an event parameter.
+          Any other word is a variable name. A name holds letters and digits. A
+          name also holds <Code>-</Code>, <Code>?</Code>, and other marks.{" "}
+          <Code>def</Code>, <Code>let</Code>, a function parameter, or an event
+          parameter binds the word.
         </p>
       </Block>
       <Block>
@@ -346,9 +349,10 @@ function Syntax() {
           with <Code>unknown name</Code>.
         </p>
         <p>
-          A list <Code>(f a b)</Code> evaluates <Code>f</Code>, then each
-          argument, then calls <Code>f</Code>. A keyword does not follow this
-          rule. The Keywords tab lists those forms.
+          A list <Code>(f a b)</Code> evaluates <Code>f</Code>. Then the list
+          evaluates each argument. Then the list calls <Code>f</Code>. A
+          keyword does not follow this rule. The Keywords tab lists those
+          forms.
         </p>
       </Block>
     </div>
@@ -368,10 +372,10 @@ function Keywords() {
       <Block>
         <H>if and else</H>
         <p>
-          <Code>if</Code> runs a branch. Every form after the test and before{" "}
-          <Code>else</Code> is the true branch. Every form after{" "}
+          <Code>if</Code> starts a branch. Every form after the test and
+          before <Code>else</Code> is the true branch. Every form after{" "}
           <Code>else</Code> is the false branch. The result is the last form
-          of the branch that ran.
+          of the branch that started.
         </p>
         <p>
           A missing <Code>else</Code> means the false branch is{" "}
@@ -393,12 +397,13 @@ else
         <H>and, or, not</H>
         <p>
           <Code>(and a b)</Code> evaluates from left to right. The form stops
-          at the first false value and returns that value. If every value is
-          true, the form returns the last value.
+          at the first false value. The form returns that value. If every
+          value is true, the form returns the last value.
         </p>
         <p>
-          <Code>(or a b)</Code> stops at the first true value and returns that
-          value. If every value is false, the form returns the last value.
+          <Code>(or a b)</Code> stops at the first true value. The form
+          returns that value. If every value is false, the form returns the
+          last value.
         </p>
         <p>
           <Code>(not x)</Code> is true when <Code>x</Code> is false.
@@ -419,11 +424,11 @@ else
         </p>
         <p>
           <Code>(def announce (msg) ...)</Code> makes a function. The form
-          matches <Code>on</Code>: the name, then a parameter list, then the
-          body.
+          matches <Code>on</Code>. The parts are the name, a parameter list,
+          and the body.
         </p>
         <p>
-          <Code>(announce "Find the red key.")</Code> then runs that
+          <Code>(announce "Find the red key.")</Code> starts that
           function. <Code>announce</Code> is not a built-in function.
         </p>
       </Block>
@@ -463,8 +468,9 @@ else
         <H>after</H>
         <p>
           <Code>(after seconds ...)</Code> waits that many seconds. Then the
-          body runs. <Code>(after 1 (open "door-exit"))</Code> opens that door
-          after one second. The form can hold more than one body form.
+          body starts. <Code>(after 1 (open "door-exit"))</Code>{" "}
+          opens that door after one second. The form holds more than one body
+          form.
         </p>
       </Block>
       <Block>
@@ -485,7 +491,7 @@ function Builtins() {
         <H>Arithmetic</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>
-            <Code>(+ a b ...)</Code> adds. One argument is fine. Zero
+            <Code>(+ a b ...)</Code> adds. One argument is valid. Zero
             arguments return <Code>0</Code>.
           </li>
           <li>
@@ -499,7 +505,7 @@ function Builtins() {
           </li>
           <li>
             <Code>(/ a b ...)</Code> divides from the left. A zero divisor
-            becomes a tiny number so the script does not stop.
+            becomes a tiny number. The script does not stop.
           </li>
           <li>
             <Code>(mod a b)</Code> is the remainder of <Code>a</Code> divided
@@ -588,17 +594,17 @@ function Events() {
         <H>The on form</H>
         <p>
           An <Code>(on ...)</Code> form is valid only at the top of the
-          script. The form is the same shape as a function:{" "}
+          script. The form has the same shape as a function:{" "}
           <Code>(on event (args...) body...)</Code>.
         </p>
         <p>
-          Use keys in the parameter list so the order does not matter.{" "}
+          Keys in the parameter list make the order free.{" "}
           <Code>(on shoot (target: x: y:) ...)</Code> binds those values.{" "}
           <Code>(on shoot (target:) ...)</Code> binds only <Code>target</Code>.
         </p>
         <p>
-          A missing key binds <Code>nil</Code>. The body runs for every match
-          of that event. Use <Code>if</Code> to compare a parameter to a
+          A missing key binds <Code>nil</Code>. The body starts for every
+          match of that event. <Code>if</Code> compares a parameter to a
           string.
         </p>
       </Block>
@@ -606,38 +612,38 @@ function Events() {
         <H>Event list</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>
-            <Code>(on start () ...)</Code> runs when the fight begins.
+            <Code>(on start () ...)</Code> starts when the fight begins.
           </li>
           <li>
-            <Code>(on enter (zone:) ...)</Code> runs when the player walks
+            <Code>(on enter (zone:) ...)</Code> starts when the player walks
             into a zone. <Code>zone</Code> is a string.
           </li>
           <li>
-            <Code>(on leave (zone:) ...)</Code> runs when the player leaves a
+            <Code>(on leave (zone:) ...)</Code> starts when the player leaves a
             zone.
           </li>
           <li>
-            <Code>(on use (target: x: y:) ...)</Code> runs when the player
+            <Code>(on use (target: x: y:) ...)</Code> starts when the player
             presses E on a thing or a mark.
           </li>
           <li>
-            <Code>(on shoot (target: x: y:) ...)</Code> runs when a shot hits a
-            mark or a door. A wall with no name passes an empty string.
+            <Code>(on shoot (target: x: y:) ...)</Code> starts when a shot hits
+            a mark or a door. A wall with no name passes an empty string.
           </li>
           <li>
-            <Code>(on die (enemy: x: y:) ...)</Code> runs when an enemy dies.
+            <Code>(on die (enemy: x: y:) ...)</Code> starts when an enemy dies.
           </li>
           <li>
-            <Code>(on pickup (target:) ...)</Code> runs when the player takes an
-            item. Ammo, health, and pickups all fire this event.
+            <Code>(on pickup (target:) ...)</Code> starts when the player takes
+            an item. Ammo, health, and pickups all fire this event.
           </li>
           <li>
-            <Code>(on hurt (target: amount:) ...)</Code> runs when the player or
-            an enemy takes damage. For the player, <Code>target</Code> is{" "}
+            <Code>(on hurt (target: amount:) ...)</Code> starts when the player
+            or an enemy takes damage. For the player, <Code>target</Code> is{" "}
             <Code>"player"</Code>.
           </li>
           <li>
-            <Code>(on teleport (pad:) ...)</Code> runs when the player uses a
+            <Code>(on teleport (pad:) ...)</Code> starts when the player uses a
             pad.
           </li>
         </ul>
@@ -697,14 +703,47 @@ function Commands() {
       <Block>
         <H>set-wall</H>
         <p>
-          <Code>(set-wall "panel" 0)</Code> sets the wall at that
-          mark. The second value is <Code>0</Code> for empty, or{" "}
-          <Code>1</Code> through <Code>6</Code> for a pattern.
+          <Code>set-wall</Code> changes cells. The call uses keys only.
         </p>
         <p>
-          <Code>(set-wall x y tex)</Code> uses cell coordinates. The name can
-          also be a door. The cell of that door changes.
+          The cells are <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>.{" "}
+          <Code>at:</Code> is the name of a mark, a door, or a zone. A zone
+          sets every square in that zone. <Code>x:</Code> and <Code>y:</Code>{" "}
+          are cell coordinates.
         </p>
+        <p>
+          <Code>type:</Code> is a pattern name. The names are{" "}
+          <Code>"empty"</Code>, <Code>"tech-panel"</Code>,{" "}
+          <Code>"blood-brick"</Code>,{" "}
+          <Code>"rust-metal"</Code>, <Code>"circuit"</Code>,{" "}
+          <Code>"stone"</Code>, and <Code>"hazard"</Code>.
+        </p>
+        <p>
+          <Code>color:</Code>, <Code>floor:</Code>, and{" "}
+          <Code>ceiling:</Code> are color strings such as{" "}
+          <Code>"#6b4a3a"</Code>.
+        </p>
+        <p>A missing key does not change that attribute.</p>
+        <p>Examples:</p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <Code>
+              (set-wall at: "panel" type: "empty")
+            </Code>
+          </li>
+          <li>
+            <Code>
+              (set-wall x: 5 y: 8 type: "rust-metal" color:
+              "#8b3a3a")
+            </Code>
+          </li>
+          <li>
+            <Code>
+              (set-wall at: "ambush" floor: "#1a3028"
+              ceiling: "#0c1014")
+            </Code>
+          </li>
+        </ul>
       </Block>
       <Block>
         <H>remove, teleport, win, lose</H>
@@ -716,7 +755,7 @@ function Commands() {
             <Code>(teleport "player" "stash")</Code> moves
             the player to that mark.{" "}
             <Code>(teleport "player" x y)</Code> uses numbers. The
-            first argument can be a thing name.
+            first argument is also valid as a thing name.
           </li>
           <li>
             <Code>(win)</Code> and <Code>(lose)</Code> end the fight.
@@ -730,9 +769,9 @@ function Commands() {
           name of the new thing. The call uses keys only.
         </p>
         <p>
-          Required keys are <Code>type:</Code>, <Code>x:</Code>, and{" "}
-          <Code>y:</Code>. Optional keys are <Code>name:</Code> and{" "}
-          <Code>variant:</Code>.
+          Required keys are <Code>type:</Code> and a place. The place is{" "}
+          <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>. Optional
+          keys are <Code>name:</Code> and <Code>variant:</Code>.
         </p>
         <p>
           <Code>type:</Code> is a string: <Code>"enemy"</Code>,{" "}
@@ -742,12 +781,14 @@ function Commands() {
           <Code>"pickup"</Code>.
         </p>
         <p>
-          <Code>x:</Code> and <Code>y:</Code> are map positions. The center
-          of a cell is a number that ends in <Code>.5</Code>.
+          <Code>at:</Code> is the name of a mark or a thing. The new thing
+          appears at that place. <Code>x:</Code> and <Code>y:</Code> are map
+          positions. The center of a cell is a number that ends in{" "}
+          <Code>.5</Code>.
         </p>
         <p>
-          <Code>name:</Code> is a string. You can build it with{" "}
-          <Code>str</Code>. If the name is missing, the game makes an id.
+          <Code>name:</Code> is a string. <Code>str</Code> makes a name. If
+          the name is missing, the game makes an id.
         </p>
         <p>
           <Code>variant:</Code> is only for an enemy. The value is{" "}
@@ -762,7 +803,7 @@ function Commands() {
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>
-              (spawn type: "enemy" x: 11.5 y: 6.5 name:
+              (spawn type: "enemy" at: "stash" name:
               "warden" variant: "bruiser")
             </Code>
           </li>

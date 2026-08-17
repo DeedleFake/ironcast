@@ -1,6 +1,12 @@
 import type { ColorGrid, GameLevel } from "./types";
 import { LEVEL_VERSION, colorGrid, parseHexColor, seedWallColors, uid } from "./types";
 import { parseLevel } from "./levelIO";
+import { formatLisp } from "./lisp";
+
+function prettyScript(src: string): string {
+  const r = formatLisp(src);
+  return r.ok ? r.text : src;
+}
 
 function fillColors(w: number, h: number, hex: string): ColorGrid {
   return colorGrid(w, h, parseHexColor(hex));
@@ -256,7 +262,7 @@ export function createNightVaultLevel(): GameLevel {
   walls[4]![10] = 5;
   walls[8]![10] = 5;
 
-  const script = `(def announce (msg)
+  const script = prettyScript(`(def announce (msg)
   (say (str ">> " msg)))
 
 (on start ()
@@ -269,7 +275,7 @@ export function createNightVaultLevel(): GameLevel {
 (on shoot (target:)
   (if not (get "freed")
     (if (= target "panel")
-      (set-wall target 0)
+      (set-wall at: target type: "empty")
       (unlock "door-cell")
       (open "door-cell")
       (set "freed" true)
@@ -313,7 +319,7 @@ export function createNightVaultLevel(): GameLevel {
       (if not (get "warned")
         (set "warned" true)
         (announce "You are leaking. Find a pack.")))))
-`;
+`);
 
   return {
     version: LEVEL_VERSION,

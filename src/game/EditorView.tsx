@@ -1146,54 +1146,43 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   </label>
                 ) : null}
                 {can.has("color") ? (
-                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                    Color
-                    <input
-                      type="color"
-                      value={hexFromColor(
-                        selEnts.find((e) => e.type === "pickup")?.color ??
-                          DEFAULT_PICKUP,
-                      )}
-                      onChange={(e) => {
-                        const n = parseHexColor(e.target.value);
-                        const ids = new Set(
-                          selEnts.filter((x) => x.type === "pickup").map((x) => x.id),
-                        );
-                        editSel((L) => {
-                          for (const ent of L.entities) {
-                            if (ids.has(ent.id)) ent.color = n;
-                          }
-                        });
-                      }}
-                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                    />
-                  </label>
+                  <ColorPick
+                    label="Color"
+                    value={
+                      selEnts.find((e) => e.type === "pickup")?.color ??
+                      DEFAULT_PICKUP
+                    }
+                    onChange={(n) => {
+                      const ids = new Set(
+                        selEnts.filter((x) => x.type === "pickup").map((x) => x.id),
+                      );
+                      editSel((L) => {
+                        for (const ent of L.entities) {
+                          if (ids.has(ent.id)) ent.color = n;
+                        }
+                      });
+                    }}
+                  />
                 ) : null}
                 {can.has("wallColor") ? (
-                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                    Color
-                    <input
-                      type="color"
-                      value={hexFromColor(
-                        selCells
-                          .map((s) => level.wallColors?.[s.y]?.[s.x] ?? 0)
-                          .find((n) => n > 0) ||
-                          defaultWallColor(1),
-                      )}
-                      onChange={(e) => {
-                        const n = parseHexColor(e.target.value);
-                        editSel((L) => {
-                          if (!L.wallColors) L.wallColors = seedWallColors(L.walls);
-                          for (const s of selCells) {
-                            if ((L.walls[s.y]?.[s.x] ?? 0) > 0) {
-                              L.wallColors[s.y]![s.x] = n;
-                            }
+                  <ColorPick
+                    label="Color"
+                    value={
+                      selCells
+                        .map((s) => level.wallColors?.[s.y]?.[s.x] ?? 0)
+                        .find((n) => n > 0) || defaultWallColor(1)
+                    }
+                    onChange={(n) => {
+                      editSel((L) => {
+                        if (!L.wallColors) L.wallColors = seedWallColors(L.walls);
+                        for (const s of selCells) {
+                          if ((L.walls[s.y]?.[s.x] ?? 0) > 0) {
+                            L.wallColors[s.y]![s.x] = n;
                           }
-                        });
-                      }}
-                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                    />
-                  </label>
+                        }
+                      });
+                    }}
+                  />
                 ) : null}
                 {can.has("texture") ? (
                   <div className="grid gap-0.5">
@@ -1281,48 +1270,38 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               ) : null}
               {showFloor ? (
                 <Section title={floorTitle}>
-                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                    Ceiling
-                    <input
-                      type="color"
-                      value={hexFromColor(
-                        level.ceils[floorCells[0]!.y]?.[floorCells[0]!.x] ??
-                          DEFAULT_CEIL,
-                      )}
-                      onChange={(e) => {
-                        const n = parseHexColor(e.target.value);
-                        editSel((L) => {
-                          for (const s of floorCells) {
-                            if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
-                              L.ceils[s.y]![s.x] = n;
-                            }
+                  <ColorPick
+                    label="Ceiling"
+                    value={
+                      level.ceils[floorCells[0]!.y]?.[floorCells[0]!.x] ??
+                      DEFAULT_CEIL
+                    }
+                    onChange={(n) => {
+                      editSel((L) => {
+                        for (const s of floorCells) {
+                          if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
+                            L.ceils[s.y]![s.x] = n;
                           }
-                        });
-                      }}
-                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                    Floor
-                    <input
-                      type="color"
-                      value={hexFromColor(
-                        level.floors[floorCells[0]!.y]?.[floorCells[0]!.x] ??
-                          DEFAULT_FLOOR,
-                      )}
-                      onChange={(e) => {
-                        const n = parseHexColor(e.target.value);
-                        editSel((L) => {
-                          for (const s of floorCells) {
-                            if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
-                              L.floors[s.y]![s.x] = n;
-                            }
+                        }
+                      });
+                    }}
+                  />
+                  <ColorPick
+                    label="Floor"
+                    value={
+                      level.floors[floorCells[0]!.y]?.[floorCells[0]!.x] ??
+                      DEFAULT_FLOOR
+                    }
+                    onChange={(n) => {
+                      editSel((L) => {
+                        for (const s of floorCells) {
+                          if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
+                            L.floors[s.y]![s.x] = n;
                           }
-                        });
-                      }}
-                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                    />
-                  </label>
+                        }
+                      });
+                    }}
+                  />
                 </Section>
               ) : null}
             </div>
@@ -1336,28 +1315,16 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               <Section title={brushLabel}>
                 {brush.kind === "wall" && brush.tex === 0 ? (
                   <>
-                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                      Ceiling
-                      <input
-                        type="color"
-                        value={hexFromColor(emptyCeil)}
-                        onChange={(e) =>
-                          setEmptyCeil(parseHexColor(e.target.value))
-                        }
-                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                      Floor
-                      <input
-                        type="color"
-                        value={hexFromColor(emptyFloor)}
-                        onChange={(e) =>
-                          setEmptyFloor(parseHexColor(e.target.value))
-                        }
-                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                      />
-                    </label>
+                    <ColorPick
+                      label="Ceiling"
+                      value={emptyCeil}
+                      onChange={setEmptyCeil}
+                    />
+                    <ColorPick
+                      label="Floor"
+                      value={emptyFloor}
+                      onChange={setEmptyFloor}
+                    />
                     <p className="text-[10px] leading-snug text-dim">
                       Paint empty cells to apply these colors.
                     </p>
@@ -1365,17 +1332,11 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 ) : null}
                 {brush.kind === "wall" && brush.tex > 0 ? (
                   <>
-                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                      Color
-                      <input
-                        type="color"
-                        value={hexFromColor(wallColor)}
-                        onChange={(e) =>
-                          setWallColor(parseHexColor(e.target.value))
-                        }
-                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                      />
-                    </label>
+                    <ColorPick
+                      label="Color"
+                      value={wallColor}
+                      onChange={setWallColor}
+                    />
                     <div className="grid gap-0.5">
                     {Array.from({ length: WALL_TEXTURE_COUNT }, (_, i) => {
                       const tex = i + 1;
@@ -1474,17 +1435,11 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                         className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                       />
                     </label>
-                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                      Color
-                      <input
-                        type="color"
-                        value={hexFromColor(thingColor)}
-                        onChange={(e) =>
-                          setThingColor(parseHexColor(e.target.value))
-                        }
-                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                      />
-                    </label>
+                    <ColorPick
+                      label="Color"
+                      value={thingColor}
+                      onChange={setThingColor}
+                    />
                   </>
                 ) : null}
                 {isZoneBrush(brush) ? (
@@ -2046,6 +2001,34 @@ function SizeField({
         </button>
       </div>
     </div>
+  );
+}
+
+function ColorPick({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  const hex = hexFromColor(value);
+  return (
+    <label className="flex items-center justify-between gap-2 text-[11px] text-muted">
+      {label}
+      <span className="flex min-w-0 items-center gap-1.5">
+        <input
+          type="color"
+          value={hex}
+          onChange={(e) => onChange(parseHexColor(e.target.value))}
+          className="h-6 w-8 shrink-0 cursor-pointer border-0 bg-transparent"
+        />
+        <span className="font-mono text-[10px] uppercase tracking-wide text-fg">
+          {hex}
+        </span>
+      </span>
+    </label>
   );
 }
 
