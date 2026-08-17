@@ -1169,7 +1169,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           if (ent) ent.dest = dest;
                         });
                       }}
-                      placeholder="id of a mark"
+                      placeholder="id of a mark or zone"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -1498,7 +1498,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     <input
                       value={thingDest}
                       onChange={(e) => setThingDest(e.target.value)}
-                      placeholder="id of a mark"
+                      placeholder="id of a mark or zone"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -2684,6 +2684,7 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
       e.color ?? "",
       e.variant ?? "",
       e.locked ? 1 : 0,
+      e.disabled ? 1 : 0,
     ].join(":");
   const ae = a.entities.map(key).sort().join("|");
   const be = b.entities.map(key).sort().join("|");

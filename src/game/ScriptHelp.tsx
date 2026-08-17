@@ -1,41 +1,40 @@
 import { useState } from "react";
 import { formatLisp } from "./lisp";
 
-const SAMPLE_SRC = `(def announce (msg)
+const SAMPLE_SRC = `; Use the same names as the editor. announce is a small helper.
+(def announce (msg)
   (say (str ">> " msg)))
 
+; Lock the armory. Tell the player to find the key.
 (on start ()
-  (announce "Find the red key.")
-  (lock "door-armory"))
+  (set-attr id: "door-armory" locked: true)
+  (announce "Find the red key."))
 
-(on pickup (target:)
-  (if (= target "key-red")
-    (unlock "door-armory")
-    (announce "Armory unlocked.")))
+; The key opens the lock.
+(on pickup (target: "key-red")
+  (set-attr id: "door-armory" locked: false)
+  (announce "Armory unlocked."))
 
-(on use (target:)
-  (if (= target "door-armory")
-    (if (locked? "door-armory")
-      (say "Locked. Need the red key.")
-    else
-      (open "door-armory"))))
+(on use (target: "door-armory")
+  (if (get-attr "door-armory" "locked")
+    (say "Locked. Need the red key.")
+  else
+    (set-attr id: "door-armory" open: true)))
 
-(on enter (zone:)
-  (if (= zone "ambush")
-    (if not (get "sprung")
-      (spawn type: "enemy" x: 14.5 y: 8.5 id: "grunt-a")
-      (say "Ambush!")
-      (set "sprung" true))))
+; sprung remembers that the ambush already ran.
+(on enter (zone: "ambush")
+  (if not (get "sprung")
+    (set "sprung" true)
+    (spawn type: "enemy" x: 14.5 y: 8.5 id: "grunt-a")
+    (say "Ambush!")))
 
-(on die (enemy:)
-  (if (= enemy "grunt-a")
-    (after 1
-      (open "door-exit"))))
+(on die (enemy: "grunt-a")
+  (after 1
+    (set-attr id: "door-exit" open: true)))
 
-(on shoot (target:)
-  (if (= target "panel")
-    (set-wall at: target type: "empty")
-    (give "ammo" 20)))
+(on shoot (target: "panel")
+  (set-wall at: "panel" type: "empty")
+  (give "ammo" 20))
 `;
 
 const SAMPLE = (() => {
@@ -144,7 +143,7 @@ function Intro() {
         </p>
         <p>
           A form that is not <Code>(on ...)</Code> starts at that time. Those
-          forms define functions. Those forms also set values.
+          forms define functions.
         </p>
         <p>
           An <Code>(on ...)</Code> form does not start at load. The game stores
@@ -160,8 +159,8 @@ function Intro() {
         <ol className="list-decimal space-y-1 pl-5">
           <li>Open the Script panel.</li>
           <li>
-            Give a name to each door, pickup, zone, and mark that the script
-            uses.
+            Give a name to each door, button, pickup, zone, and mark that
+            the script uses.
           </li>
           <li>
             Write <Code>(on event (args) ...)</Code> forms for the events.
@@ -384,11 +383,11 @@ function Keywords() {
         </p>
         <p>Example:</p>
         <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
-          {`(if (locked? "door-armory")
+          {`(if (get-attr "door-armory" "locked")
   (say "Locked.")
   (say "Find the key.")
 else if (has "key-red")
-  (open "door-armory")
+  (set-attr id: "door-armory" open: true)
 else
   (say "Still locked."))`}
         </pre>
@@ -420,12 +419,10 @@ else
       <Block>
         <H>def</H>
         <p>
-          <Code>(def name value)</Code> stores a value under a name.
-        </p>
-        <p>
           <Code>(def announce (msg) ...)</Code> makes a function. The form
           matches <Code>on</Code>. The parts are the name, a parameter list,
-          and the body.
+          and the body. The body can be empty. To store a value, use{" "}
+          <Code>set</Code>.
         </p>
         <p>
           A later <Code>def</Code> with the same name adds another clause. The
@@ -446,8 +443,8 @@ else
   (say (str "This is a " value ".")))`}
         </pre>
         <p>
-          <Code>(announce "Find the red key.")</Code> starts that
-          function. <Code>announce</Code> is not a built-in function.
+          <Code>(announce "Find the red key.")</Code> runs that
+          function.
         </p>
       </Block>
       <Block>
@@ -493,7 +490,7 @@ else
         <H>after</H>
         <p>
           <Code>(after seconds ...)</Code> waits that many seconds. Then the
-          body starts. <Code>(after 1 (open "door-exit"))</Code>{" "}
+          body starts. <Code>(after 1 (set-attr id: "door-exit" open: true))</Code>{" "}
           opens that door after one second. The form holds more than one body
           form.
         </p>
@@ -553,8 +550,7 @@ function Builtins() {
         <H>Compare</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>
-            <Code>(= a b)</Code> is true when the two values are the same. A
-            name and a string with the same text are equal.
+            <Code>(= a b)</Code> is true when the two values are the same.
           </li>
           <li>
             <Code>(/= a b)</Code> is true when the two values are not the
@@ -651,7 +647,7 @@ function Events() {
           </li>
           <li>
             <Code>(on use (target: x: y:) ...)</Code> starts when the player
-            presses E on a thing or a mark.
+            presses E on a door, a pickup, or a button.
           </li>
           <li>
             <Code>(on shoot (target: x: y:) ...)</Code> starts when a shot hits
@@ -715,35 +711,53 @@ function Commands() {
         </p>
       </Block>
       <Block>
-        <H>Doors</H>
+        <H>set-attr, get-attr</H>
         <p>
-          <Code>open</Code>, <Code>close</Code>, <Code>lock</Code>, and{" "}
-          <Code>unlock</Code> take a string. Each form returns true when the
-          door exists.
+          <Code>set-attr</Code> changes a named thing.{" "}
+          <Code>get-attr</Code> reads one field from a named thing.
         </p>
         <p>
-          <Code>(locked? "door-armory")</Code> and{" "}
-          <Code>(open? "door-armory")</Code> read the state of the
-          door.
-        </p>
-      </Block>
-      <Block>
-        <H>Buttons</H>
-        <p>
-          A button is a use point. The player cannot see it. You can put it
-          on a wall. Marks are only names. The player cannot use a mark.
+          <Code>set-attr</Code> uses keys. <Code>id:</Code> is the
+          thing. Each other key is a field to change. The form returns true
+          when that thing exists.
         </p>
         <p>
-          <Code>enable</Code> and <Code>disable</Code> take the
-          button's id. A disabled button does not show a use prompt and
-          cannot be used. <Code>(disabled? "switch-1")</Code> is
-          true when that button is disabled.
+          The fields you can change are <Code>locked:</Code>,{" "}
+          <Code>open:</Code>, <Code>disabled:</Code>,{" "}
+          <Code>dest:</Code>, <Code>label:</Code>,{" "}
+          <Code>color:</Code>, and <Code>variant:</Code>.
+        </p>
+        <p>
+          <Code>locked</Code> and <Code>open</Code> belong to doors.{" "}
+          <Code>disabled</Code> belongs to buttons. A disabled button does
+          not show a use prompt. The player cannot use it.
+        </p>
+        <p>
+          <Code>(set-attr id: "door-armory" locked: true)</Code>{" "}
+          locks that door. One call can change more than one field.
+        </p>
+        <p>
+          <Code>(get-attr "door-armory" "locked")</Code> reads one
+          field. The first value is the name of the thing. The second value
+          is the field. If the thing is missing, the result is{" "}
+          <Code>nil</Code>. You can also read <Code>"type"</Code> and{" "}
+          <Code>"id"</Code>.
+        </p>
+        <p>
+          A button is a use point. The player cannot see it. You can put a
+          button on a wall. A mark is only a name for a cell. The player
+          cannot use a mark.
+        </p>
+        <p>
+          To change a wall, the floor, or the ceiling, use{" "}
+          <Code>set-wall</Code>.
         </p>
       </Block>
       <Block>
         <H>set-wall</H>
         <p>
-          <Code>set-wall</Code> changes cells. The call uses keys only.
+          <Code>set-wall</Code> changes map cells. The call uses keys
+          only.
         </p>
         <p>
           The cells are <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>.{" "}
@@ -793,9 +807,10 @@ function Commands() {
           </li>
           <li>
             <Code>(teleport "player" "stash")</Code> moves
-            the player to that mark.{" "}
-            <Code>(teleport "player" x y)</Code> uses numbers. The
-            first argument is also valid as a thing name.
+            the player to that mark, thing, or zone. A zone picks a random
+            open cell. If the mover is near that zone, farther cells
+            are more likely. <Code>(teleport "player" x y)</Code> uses
+            numbers. The first argument can also be a thing name.
           </li>
           <li>
             <Code>(win)</Code> and <Code>(lose)</Code> end the fight.
@@ -816,8 +831,9 @@ function Commands() {
           <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>.
         </p>
         <p>
-          <Code>at:</Code> is the name of a mark or a thing. The new thing
-          appears at that place.
+          <Code>at:</Code> is the name of a mark, a thing, or a zone. A
+          mark or a thing is one place. A zone picks a random open cell.
+          The picker skips walls. It prefers a cell with no other thing.
         </p>
         <p>
           <Code>x:</Code> and <Code>y:</Code> are map positions. The center
@@ -835,10 +851,10 @@ function Commands() {
           <Code>"button"</Code>.
         </p>
         <p>
-          <Code>id:</Code> is a string. <Code>str</Code> makes an id. If
-          the id is missing, <Code>spawn</Code> makes one like{" "}
-          <Code>enemy-1</Code> and returns it. Store that string if you
-          want to talk to the new thing later.
+          <Code>id:</Code> is a string. <Code>str</Code> can build
+          one. If you omit <Code>id:</Code>, <Code>spawn</Code> makes
+          a name like <Code>enemy-1</Code> and returns it. Store that
+          string if you want to use the new thing later.
         </p>
       </Block>
       <Block>
@@ -851,7 +867,10 @@ function Commands() {
       </Block>
       <Block>
         <H>ammo, health, exit</H>
-        <p>These types have no extra keys. Only place, type, and name apply.</p>
+        <p>
+          These types have no extra keys. Use <Code>type:</Code>, a
+          place, and <Code>id:</Code> if you need a name.
+        </p>
       </Block>
       <Block>
         <H>door</H>
@@ -863,8 +882,9 @@ function Commands() {
       <Block>
         <H>teleport</H>
         <p>
-          <Code>dest:</Code> is the name of a mark. If the key is missing, the
-          pad has no destination.
+          <Code>dest:</Code> is the name of a mark, a thing, or a zone. A
+          zone picks a random open cell. If the key is missing, the pad
+          has no destination.
         </p>
       </Block>
       <Block>
@@ -883,8 +903,8 @@ function Commands() {
         <H>button</H>
         <p>
           <Code>disabled:</Code> is <Code>true</Code> or{" "}
-          <Code>false</Code>. If the key is missing, the button is on. A
-          disabled button has no use prompt.
+          <Code>false</Code>. If you omit the key, the button works. A
+          disabled button does not show a use prompt.
         </p>
       </Block>
       <Block>
@@ -929,31 +949,8 @@ function Commands() {
 
 function Example() {
   return (
-    <div className="space-y-4">
-      <Block>
-        <H>What this script does</H>
-        <p>
-          The sample locks a door. The script unlocks the door when the
-          player takes the key.
-        </p>
-        <p>
-          <Code>announce</Code> is a function that the sample makes with{" "}
-          <Code>def</Code>. <Code>"sprung"</Code> is a script value
-          key. <Code>get</Code> and <Code>set</Code> read and write that
-          value.
-        </p>
-        <p>
-          Map names are strings.{" "}
-          <Code>"door-armory"</Code>,{" "}
-          <Code>"key-red"</Code>, <Code>"ambush"</Code>,{" "}
-          <Code>"grunt-a"</Code>, <Code>"panel"</Code>, and{" "}
-          <Code>"door-exit"</Code> must match the things in the
-          editor.
-        </p>
-      </Block>
-      <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
-        {SAMPLE}
-      </pre>
-    </div>
+    <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
+      {SAMPLE}
+    </pre>
   );
 }

@@ -16,7 +16,7 @@ Click a map on the menu. Then click the view to capture the mouse.
 | `E` | Use a door or a pad |
 | `Esc` | Pause |
 
-Health packs, ammo, and the exit are items on the map. Enemies walk and go around walls. A pad moves the player to a named mark.
+Health packs, ammo, and the exit are items on the map. Enemies walk and go around walls. A pad moves the player to a named mark, thing, or zone.
 
 ## Editor
 
@@ -38,7 +38,7 @@ Each wall pattern has a default color. If you keep that color, the wall looks li
 
 ### Things
 
-You can place spawn, enemies, ammo, health, an exit, doors, pads, pickups, and buttons. A pickup has short text and a color. A pad sends the player to a mark. A button is a use point. The player cannot see it. You can put a button on a wall. A disabled button does not show a use prompt. A mark names a cell. The player cannot use a mark. A script refers to a thing, zone, or mark by name.
+You can place spawn, enemies, ammo, health, an exit, doors, pads, pickups, and buttons. A pickup has short text and a color. A pad sends the player to a mark, a thing, or a zone. A zone picks a random open cell. A button is a use point. The player cannot see it. You can put a button on a wall. A disabled button does not show a use prompt. A mark names a cell. The player cannot use a mark. A script refers to a thing, zone, or mark by name.
 
 ### How to edit a map
 
@@ -63,7 +63,7 @@ Import has two actions. From file reads a JSON file. From clipboard opens a box.
 
 Each map has one script. The script is a Lisp program. Open Script in the editor. Then open the tutorial in that panel for the language rules.
 
-A typical script locks a door. Then the script unlocks the door when the player picks up a named item.
+A typical script locks a door with set-attr. Then the script unlocks the door when the player picks up a named item.
 
 ## Run the project
 

@@ -11,7 +11,7 @@ export type LispVal = (
   | { k: "list"; v: LispVal[] }
   | { k: "comment"; v: string }
   | { k: "fn"; clauses: Clause[]; keys: string[]; env: Env }
-) & { cmt?: string };
+) & { cmt?: string; blank?: boolean; broke?: boolean };
 
 export type Pattern =
   | { k: "bind"; name: string }
@@ -91,15 +91,8 @@ export const BUILTINS = new Set([
   "give",
   "take",
   "say",
-  "open",
-  "close",
-  "lock",
-  "unlock",
-  "locked?",
-  "open?",
-  "enable",
-  "disable",
-  "disabled?",
+  "set-attr",
+  "get-attr",
   "set-wall",
   "spawn",
   "remove",
@@ -254,15 +247,31 @@ export function parseLisp(src: string): ParseResult {
   try {
     const forms: LispVal[] = [];
     const p = { s: src, i: 0 };
-    skip(p);
+    let nl = skipCount(p);
     while (p.i < p.s.length) {
-      forms.push(read(p));
-      skip(p);
+      const form = read(p);
+      if (nl >= 2) form.blank = true;
+      forms.push(form);
+      nl = skipCount(p);
     }
     return { ok: true, forms };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Parse error" };
   }
+}
+
+function skipCount(p: { s: string; i: number }): number {
+  let nl = 0;
+  while (p.i < p.s.length && " \t\n\r".includes(p.s[p.i]!)) {
+    const c = p.s[p.i]!;
+    if (c === "\n") nl += 1;
+    else if (c === "\r") {
+      nl += 1;
+      if (p.s[p.i + 1] === "\n") p.i += 1;
+    }
+    p.i += 1;
+  }
+  return nl;
 }
 
 function skip(p: { s: string; i: number }) {
@@ -295,6 +304,7 @@ function read(p: { s: string; i: number }): LispVal {
   const c = p.s[p.i]!;
   if (c === ";") return readComment(p);
   if (c === "(") {
+    const open = p.i;
     p.i++;
     const xs: LispVal[] = [];
     for (;;) {
@@ -306,7 +316,9 @@ function read(p: { s: string; i: number }): LispVal {
       }
       xs.push(read(p));
     }
-    return attachTrail(p, list(xs));
+    const form = attachTrail(p, list(xs));
+    if (p.s.slice(open, p.i).includes("\n")) form.broke = true;
+    return form;
   }
   if (c === ")") throw new LispError("unexpected )");
   if (c === "'") throw new LispError("unexpected '");
@@ -350,8 +362,8 @@ export function formatLisp(src: string): { ok: true; text: string } | { ok: fals
   for (let i = 1; i < parsed.forms.length; i++) {
     const prev = parsed.forms[i - 1]!;
     const form = parsed.forms[i]!;
-    const tight = prev.k === "comment" || form.k === "comment";
-    text += (tight ? "\n" : "\n\n") + formatVal(form, 0);
+    const sep = prev.k === "comment" ? "\n" : form.blank ? "\n\n" : "\n";
+    text += sep + formatVal(form, 0);
   }
   return { ok: true, text: text + "\n" };
 }
@@ -441,7 +453,7 @@ function formatVal(v: LispVal, indent: number): string {
   if (v.k !== "list") return formatAtom(v);
   if (v.v.length === 0) return suffixCmt(v, "()");
   const headName = v.v[0]?.k === "sym" ? v.v[0].v : "";
-  if (hasBreakComment(v) || BODY_SPECIALS.has(headName)) {
+  if (hasBreakComment(v) || (BODY_SPECIALS.has(headName) && v.broke)) {
     return suffixCmt(v, formatBlock(v, indent));
   }
   const inline = formatInline(v);
@@ -648,6 +660,16 @@ function formatAtom(v: LispVal): string {
   return suffixCmt(v, formatAtomCore(v));
 }
 
+export type AttrPatch = {
+  locked?: boolean;
+  open?: boolean;
+  disabled?: boolean;
+  dest?: string;
+  label?: string;
+  color?: number;
+  variant?: string;
+};
+
 export type SetWallOpts = {
   at?: string;
   x?: number;
@@ -665,15 +687,8 @@ export type Host = {
   has: (what: string) => boolean;
   getVar: (key: string) => LispVal;
   setVar: (key: string, val: LispVal) => void;
-  open: (name: string) => boolean;
-  close: (name: string) => boolean;
-  lock: (name: string) => boolean;
-  unlock: (name: string) => boolean;
-  isLocked: (name: string) => boolean;
-  isOpen: (name: string) => boolean;
-  enable: (name: string) => boolean;
-  disable: (name: string) => boolean;
-  isDisabled: (name: string) => boolean;
+  setAttr: (id: string, patch: AttrPatch) => boolean;
+  getAttr: (id: string, attr: string) => LispVal | undefined;
   setWall: (opts: SetWallOpts) => boolean;
   spawn: (opts: {
     type: string;
@@ -757,7 +772,10 @@ export function compileProgram(src: string): { ok: true; program: Program } | { 
       }
       continue;
     }
-    if (isTopFnDef(form)) {
+    if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "def") {
+      if (!isTopFnDef(form)) {
+        return { ok: false, error: "(def name (args...) body)" };
+      }
       const name = form.v[1].v;
       if (fnMap.has(name) && !(last?.t === "fn" && last.name === name)) {
         return {
@@ -782,15 +800,6 @@ export function compileProgram(src: string): { ok: true; program: Program } | { 
       }
       continue;
     }
-    if (isValueDef(form)) {
-      const name = form.v[1].v;
-      if (fnMap.has(name)) {
-        return {
-          ok: false,
-          error: `${name} is already a function`,
-        };
-      }
-    }
     breakAdj();
     boot.push(form);
   }
@@ -810,19 +819,7 @@ function isTopFnDef(
     form.v[0].v === "def" &&
     form.v[1]?.k === "sym" &&
     form.v[2]?.k === "list" &&
-    form.v.length >= 4
-  );
-}
-
-function isValueDef(
-  form: LispVal,
-): form is { k: "list"; v: [LispVal, { k: "sym"; v: string }, ...LispVal[]] } {
-  return (
-    form.k === "list" &&
-    form.v[0]?.k === "sym" &&
-    form.v[0].v === "def" &&
-    form.v[1]?.k === "sym" &&
-    !(form.v[2]?.k === "list" && form.v.length >= 4)
+    form.v.length >= 3
   );
 }
 
@@ -1126,19 +1123,17 @@ function makeFn(args: LispVal[], env: Env): LispVal {
 function evalDef(args: LispVal[], env: Env, ctx: Ctx): LispVal {
   const head = args[0];
   if (!head || head.k !== "sym") {
-    throw new LispError("(def name value) or (def name (args...) body)");
+    throw new LispError("(def name (args...) body)");
   }
-  if (args.length >= 3 && args[1]?.k === "list") {
-    const fn = makeFnVal(
-      [{ params: parseParams(args[1], "def"), body: args.slice(2) }],
-      env,
-    );
-    env.vars.set(head.v, fn);
-    return fn;
+  if (!args[1] || args[1].k !== "list") {
+    throw new LispError("(def name (args...) body)");
   }
-  const val = evalVal(args[1] ?? nil(), env, ctx);
-  env.vars.set(head.v, val);
-  return val;
+  const fn = makeFnVal(
+    [{ params: parseParams(args[1], "def"), body: args.slice(2) }],
+    env,
+  );
+  env.vars.set(head.v, fn);
+  return fn;
 }
 
 function evalLet(args: LispVal[], env: Env, ctx: Ctx): LispVal {
@@ -1193,7 +1188,10 @@ function posArgs(name: string, call: CallParts): LispVal[] {
 
 function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
   const h = ctx.host;
-  const args = name === "spawn" || name === "set-wall" ? call.pos : posArgs(name, call);
+  const args =
+    name === "spawn" || name === "set-wall" || name === "set-attr"
+      ? call.pos
+      : posArgs(name, call);
   const nums = () => args.map((a) => asNum(a, name));
   switch (name) {
     case "+":
@@ -1303,24 +1301,67 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
     case "say":
       h.say(args.map(printVal).join(""));
       return nil();
-    case "open":
-      return bool(h.open(asName(args[0] ?? nil())));
-    case "close":
-      return bool(h.close(asName(args[0] ?? nil())));
-    case "lock":
-      return bool(h.lock(asName(args[0] ?? nil())));
-    case "unlock":
-      return bool(h.unlock(asName(args[0] ?? nil())));
-    case "locked?":
-      return bool(h.isLocked(asName(args[0] ?? nil())));
-    case "open?":
-      return bool(h.isOpen(asName(args[0] ?? nil())));
-    case "enable":
-      return bool(h.enable(asName(args[0] ?? nil())));
-    case "disable":
-      return bool(h.disable(asName(args[0] ?? nil())));
-    case "disabled?":
-      return bool(h.isDisabled(asName(args[0] ?? nil())));
+    case "set-attr": {
+      if (call.pos.length) throw new LispError("set-attr needs keys");
+      const allowed = [
+        "id",
+        "locked",
+        "open",
+        "disabled",
+        "dest",
+        "label",
+        "color",
+        "variant",
+      ];
+      for (const key of call.keys.keys()) {
+        if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
+      }
+      const id = call.keys.get("id");
+      if (!id) throw new LispError("set-attr needs id:");
+      const patch: AttrPatch = {};
+      if (call.keys.has("locked")) patch.locked = truthy(call.keys.get("locked")!);
+      if (call.keys.has("open")) patch.open = truthy(call.keys.get("open")!);
+      if (call.keys.has("disabled")) {
+        patch.disabled = truthy(call.keys.get("disabled")!);
+      }
+      const dest = call.keys.get("dest");
+      if (dest) patch.dest = asName(dest);
+      const label = call.keys.get("label");
+      if (label) patch.label = asName(label);
+      const color = call.keys.get("color");
+      if (color) patch.color = asColor(color, "color");
+      const variant = call.keys.get("variant");
+      if (variant) patch.variant = asName(variant);
+      if (
+        patch.locked === undefined &&
+        patch.open === undefined &&
+        patch.disabled === undefined &&
+        !dest &&
+        !label &&
+        !color &&
+        !variant
+      ) {
+        throw new LispError("set-attr needs an attribute");
+      }
+      return bool(h.setAttr(asName(id), patch));
+    }
+    case "get-attr": {
+      if (args.length < 2) throw new LispError("get-attr needs an id and an attr");
+      const attr = asName(args[1]!);
+      const ok = [
+        "locked",
+        "open",
+        "disabled",
+        "dest",
+        "label",
+        "color",
+        "variant",
+        "type",
+        "id",
+      ];
+      if (!ok.includes(attr)) throw new LispError(`unknown attr ${attr}`);
+      return h.getAttr(asName(args[0]!), attr) ?? nil();
+    }
     case "set-wall": {
       if (call.pos.length) {
         throw new LispError("set-wall needs keys");

@@ -23,6 +23,7 @@ import {
   nil,
   num,
   str,
+  bool,
   type Env,
   type Host,
   type LispVal,
@@ -277,6 +278,70 @@ function findMark(state: GameState, name: string) {
 function findZone(state: GameState, name: string) {
   if (!name) return undefined;
   return (state.level.zones ?? []).find((z) => z.id === name);
+}
+
+function cellBusy(state: GameState, x: number, y: number): boolean {
+  if (Math.floor(state.px) === x && Math.floor(state.py) === y) return true;
+  for (const e of state.entities) {
+    if (!e.alive || e.type === "button") continue;
+    if (Math.floor(e.x) === x && Math.floor(e.y) === y) return true;
+  }
+  return false;
+}
+
+/** Mark, named thing, or a random open cell in a zone. */
+function resolveSpot(
+  state: GameState,
+  name: string,
+  from?: { x: number; y: number },
+): { x: number; y: number } | null {
+  const mark = findMark(state, name);
+  if (mark) return { x: mark.x + 0.5, y: mark.y + 0.5 };
+  const named = findNamed(state, name);
+  if (named) return { x: named.x, y: named.y };
+  const zone = findZone(state, name);
+  if (!zone) return null;
+  const open: { x: number; y: number; busy: boolean }[] = [];
+  const x1 = zone.x + zone.w;
+  const y1 = zone.y + zone.h;
+  for (let y = zone.y; y < y1; y++) {
+    for (let x = zone.x; x < x1; x++) {
+      if (x < 0 || y < 0 || x >= state.level.width || y >= state.level.height) {
+        continue;
+      }
+      if ((state.level.walls[y]?.[x] ?? 0) > 0) continue;
+      if (closedDoorAt(state, x, y)) continue;
+      open.push({ x, y, busy: cellBusy(state, x, y) });
+    }
+  }
+  if (!open.length) return null;
+  const free = open.filter((c) => !c.busy);
+  const pool = free.length ? free : open;
+  const c = pickZoneCell(pool, from);
+  return { x: c.x + 0.5, y: c.y + 0.5 };
+}
+
+function pickZoneCell(
+  pool: { x: number; y: number }[],
+  from?: { x: number; y: number },
+): { x: number; y: number } {
+  if (!from || pool.length === 1) {
+    return pool[Math.floor(Math.random() * pool.length)]!;
+  }
+  const weights = pool.map((c) => {
+    const dx = c.x + 0.5 - from.x;
+    const dy = c.y + 0.5 - from.y;
+    return dx * dx + dy * dy;
+  });
+  let total = 0;
+  for (const w of weights) total += w;
+  if (total <= 0) return pool[Math.floor(Math.random() * pool.length)]!;
+  let roll = Math.random() * total;
+  for (let i = 0; i < pool.length; i++) {
+    roll -= weights[i]!;
+    if (roll <= 0) return pool[i]!;
+  }
+  return pool[pool.length - 1]!;
 }
 
 function blocked(state: GameState, x: number, y: number): boolean {
@@ -565,13 +630,7 @@ function updatePickups(state: GameState) {
       runScript(state, "pickup", { target: str(e.id) });
     } else if (e.type === "teleport") {
       if (state.teleportCd > 0 || !e.dest) continue;
-      const destEnt = findNamed(state, e.dest);
-      const m = findMark(state, e.dest);
-      const dest = destEnt
-        ? { x: destEnt.x, y: destEnt.y }
-        : m
-          ? { x: m.x + 0.5, y: m.y + 0.5 }
-          : null;
+      const dest = resolveSpot(state, e.dest, { x: state.px, y: state.py });
       if (dest) {
         state.px = dest.x;
         state.py = dest.y;
@@ -706,12 +765,6 @@ function runScript(
 }
 
 function makeHost(state: GameState): Host {
-  const setDoor = (name: string, patch: Partial<LiveEntity>) => {
-    const e = findNamed(state, name);
-    if (!e || e.type !== "door") return false;
-    Object.assign(e, patch);
-    return true;
-  };
   return {
     say: (msg) => {
       pushSay(state, msg);
@@ -747,27 +800,45 @@ function makeHost(state: GameState): Host {
     setVar: (key, val) => {
       state.flags.set(key, val);
     },
-    open: (name) => setDoor(name, { open: true }),
-    close: (name) => setDoor(name, { open: false }),
-    lock: (name) => setDoor(name, { locked: true }),
-    unlock: (name) => setDoor(name, { locked: false }),
-    isLocked: (name) => !!findNamed(state, name)?.locked,
-    isOpen: (name) => !!findNamed(state, name)?.open,
-    enable: (name) => {
-      const e = findNamed(state, name);
-      if (!e || e.type !== "button") return false;
-      e.disabled = false;
+    setAttr: (id, patch) => {
+      const e = findNamed(state, id);
+      if (!e) return false;
+      if (patch.locked !== undefined) e.locked = patch.locked;
+      if (patch.open !== undefined) e.open = patch.open;
+      if (patch.disabled !== undefined) e.disabled = patch.disabled;
+      if (patch.dest !== undefined) e.dest = patch.dest;
+      if (patch.label !== undefined) e.label = patch.label.slice(0, 3);
+      if (patch.color !== undefined) e.color = patch.color;
+      if (patch.variant !== undefined) {
+        e.variant = patch.variant === "bruiser" ? "bruiser" : "grunt";
+      }
       return true;
     },
-    disable: (name) => {
-      const e = findNamed(state, name);
-      if (!e || e.type !== "button") return false;
-      e.disabled = true;
-      return true;
-    },
-    isDisabled: (name) => {
-      const e = findNamed(state, name);
-      return !!e && e.type === "button" && e.disabled;
+    getAttr: (id, attr) => {
+      const e = findNamed(state, id);
+      if (!e) return undefined;
+      switch (attr) {
+        case "locked":
+          return bool(e.locked);
+        case "open":
+          return bool(e.open);
+        case "disabled":
+          return bool(e.disabled);
+        case "dest":
+          return e.dest ? str(e.dest) : nil();
+        case "label":
+          return e.label ? str(e.label) : nil();
+        case "color":
+          return str(hexFromColor(e.color));
+        case "variant":
+          return str(e.variant);
+        case "type":
+          return str(e.type);
+        case "id":
+          return e.id ? str(e.id) : nil();
+        default:
+          return nil();
+      }
     },
     setWall: (opts) => {
       const cells: { x: number; y: number }[] = [];
@@ -825,15 +896,10 @@ function makeHost(state: GameState): Host {
       let x = opts.x;
       let y = opts.y;
       if (opts.at) {
-        const mark = findMark(state, opts.at);
-        const named = findNamed(state, opts.at);
-        if (mark) {
-          x = mark.x + 0.5;
-          y = mark.y + 0.5;
-        } else if (named) {
-          x = named.x;
-          y = named.y;
-        } else return null;
+        const spot = resolveSpot(state, opts.at);
+        if (!spot) return null;
+        x = spot.x;
+        y = spot.y;
       }
       if (x === undefined || y === undefined) return null;
       const key = uid("k");
@@ -864,18 +930,22 @@ function makeHost(state: GameState): Host {
     teleport: (who, dest, y) => {
       let tx: number | null = null;
       let ty: number | null = null;
+      const self =
+        who === "player"
+          ? { x: state.px, y: state.py }
+          : findNamed(state, who);
       if (dest.k === "num" && y?.k === "num") {
         tx = dest.v;
         ty = y.v;
       } else if (dest.k === "sym" || dest.k === "str") {
-        const e = findNamed(state, dest.v);
-        const m = findMark(state, dest.v);
-        if (e) {
-          tx = e.x;
-          ty = e.y;
-        } else if (m) {
-          tx = m.x + 0.5;
-          ty = m.y + 0.5;
+        const spot = resolveSpot(
+          state,
+          dest.v,
+          self ? { x: self.x, y: self.y } : undefined,
+        );
+        if (spot) {
+          tx = spot.x;
+          ty = spot.y;
         }
       }
       if (tx === null || ty === null) return false;
