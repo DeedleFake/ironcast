@@ -31,6 +31,8 @@ export interface LevelEntity {
   name?: string;
   /** Teleport destination name */
   dest?: string;
+  /** Short text drawn on a pickup sprite */
+  label?: string;
   variant?: EnemyVariant;
   locked?: boolean;
 }

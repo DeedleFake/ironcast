@@ -221,13 +221,13 @@ function pruneSel(level: GameLevel, sel: SelItem[]): SelItem[] {
   });
 }
 
-type SelOpt = "texture" | "floor" | "variant" | "name" | "dest" | "turn";
+type SelOpt = "texture" | "floor" | "variant" | "name" | "dest" | "turn" | "label";
 
 function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
   if (s.k === "cell") {
     const wall = level.walls[s.y]?.[s.x] ?? 0;
     return wall === 0
-      ? new Set<SelOpt>(["texture", "floor"])
+      ? new Set<SelOpt>(["floor"])
       : new Set<SelOpt>(["texture"]);
   }
   if (s.k === "entity") {
@@ -235,6 +235,7 @@ function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
     if (!e) return new Set();
     if (e.type === "enemy") return new Set<SelOpt>(["variant", "name"]);
     if (e.type === "teleport") return new Set<SelOpt>(["name", "dest"]);
+    if (e.type === "pickup") return new Set<SelOpt>(["name", "label"]);
     return new Set<SelOpt>(["name"]);
   }
   if (s.k === "mark" || s.k === "zone") return new Set<SelOpt>(["name"]);
@@ -297,6 +298,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [wallTex, setWallTex] = useState(1);
   const [thingName, setThingName] = useState("");
   const [thingDest, setThingDest] = useState("");
+  const [thingLabel, setThingLabel] = useState("?");
   const [variant, setVariant] = useState<EnemyVariant>("grunt");
   const [emptyFloor, setEmptyFloor] = useState(DEFAULT_FLOOR);
   const [emptyCeil, setEmptyCeil] = useState(DEFAULT_CEIL);
@@ -320,6 +322,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   nameRef.current = thingName;
   const destRef = useRef(thingDest);
   destRef.current = thingDest;
+  const labelRef = useRef(thingLabel);
+  labelRef.current = thingLabel;
   const variantRef = useRef(variant);
   variantRef.current = variant;
   const floorRef = useRef(emptyFloor);
@@ -514,6 +518,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       const extra = {
         name: nameRef.current,
         dest: destRef.current,
+        label: labelRef.current,
         variant: variantRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
@@ -531,6 +536,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       const extra = {
         name: nameRef.current,
         dest: destRef.current,
+        label: labelRef.current,
         variant: variantRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
@@ -556,6 +562,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       chooseBrush({ kind: "thing", thing: ent.type });
       setThingName(ent.name || "");
       setThingDest(ent.dest || "");
+      setThingLabel(ent.label || "?");
       setVariant(ent.variant === "bruiser" ? "bruiser" : "grunt");
       setStatus(`Picked ${ent.name || ent.type}`);
       return;
@@ -701,6 +708,14 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         ? groundEmpties
         : [];
   const showFloor = floorCells.length > 0;
+  const hasThingOpts =
+    can.has("name") ||
+    can.has("dest") ||
+    can.has("texture") ||
+    can.has("variant") ||
+    can.has("turn") ||
+    can.has("label");
+  const floorTitle = occupantCount > 0 ? "Ground" : "Empty";
   const hasSpawn = liveSel.some((s) => s.k === "spawn");
   const singleEnt = liveSel.length === 1 && liveSel[0]!.k === "entity" ? selEnts[0] : null;
   const singleMark =
@@ -993,13 +1008,14 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               <p className="text-[10px] tracking-widest text-dim uppercase">
                 Selected
               </p>
+              {liveSel.length === 0 || hasThingOpts || (liveSel.length > 0 && !showFloor && !hasThingOpts) ? (
               <Section title={selTitle}>
                 {liveSel.length === 0 ? (
                   <p className="text-[10px] leading-snug text-dim">
                     Click a thing, or drag a box. Hold Shift to add or remove.
                   </p>
                 ) : null}
-                {liveSel.length > 0 && can.size === 0 && !showFloor ? (
+                {liveSel.length > 0 && !hasThingOpts && !showFloor ? (
                   <p className="text-[10px] leading-snug text-dim">
                     No shared options for this mix.
                   </p>
@@ -1054,29 +1070,32 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     />
                   </label>
                 ) : null}
+                {can.has("label") ? (
+                  <label className="block text-[11px] text-muted">
+                    Text
+                    <input
+                      value={
+                        selEnts.find((e) => e.type === "pickup")?.label ?? "?"
+                      }
+                      maxLength={3}
+                      onChange={(e) => {
+                        const label = e.target.value.slice(0, 3);
+                        const ids = new Set(
+                          selEnts.filter((x) => x.type === "pickup").map((x) => x.id),
+                        );
+                        editSel((L) => {
+                          for (const ent of L.entities) {
+                            if (ids.has(ent.id)) ent.label = label;
+                          }
+                        });
+                      }}
+                      placeholder="?"
+                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                    />
+                  </label>
+                ) : null}
                 {can.has("texture") ? (
                   <div className="grid gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() =>
-                        editSel((L) => {
-                          for (const s of selCells) L.walls[s.y]![s.x] = 0;
-                        })
-                      }
-                      className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
-                        selCells.every(
-                          (s) => (level.walls[s.y]?.[s.x] ?? 0) === 0,
-                        )
-                          ? "border-primary bg-primary/15 text-fg"
-                          : "border-transparent text-muted hover:border-border hover:text-fg"
-                      }`}
-                    >
-                      <span
-                        className="size-4 shrink-0 rounded-sm border border-black/40"
-                        style={{ background: hexFromColor(DEFAULT_FLOOR) }}
-                      />
-                      <span className="truncate">Empty</span>
-                    </button>
                     {Array.from({ length: WALL_TEXTURE_COUNT }, (_, i) => {
                       const tex = i + 1;
                       const allThis =
@@ -1091,7 +1110,9 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           onClick={() =>
                             editSel((L) => {
                               for (const s of selCells) {
-                                L.walls[s.y]![s.x] = tex;
+                                if ((L.walls[s.y]?.[s.x] ?? 0) > 0) {
+                                  L.walls[s.y]![s.x] = tex;
+                                }
                               }
                             })
                           }
@@ -1152,29 +1173,9 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   </button>
                 ) : null}
               </Section>
+              ) : null}
               {showFloor ? (
-                <Section title="Ground">
-                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                    Floor
-                    <input
-                      type="color"
-                      value={hexFromColor(
-                        level.floors[floorCells[0]!.y]?.[floorCells[0]!.x] ??
-                          DEFAULT_FLOOR,
-                      )}
-                      onChange={(e) => {
-                        const n = parseHexColor(e.target.value);
-                        editSel((L) => {
-                          for (const s of floorCells) {
-                            if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
-                              L.floors[s.y]![s.x] = n;
-                            }
-                          }
-                        });
-                      }}
-                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                    />
-                  </label>
+                <Section title={floorTitle}>
                   <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
                     Ceiling
                     <input
@@ -1196,6 +1197,27 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                       className="h-6 w-8 cursor-pointer border-0 bg-transparent"
                     />
                   </label>
+                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                    Floor
+                    <input
+                      type="color"
+                      value={hexFromColor(
+                        level.floors[floorCells[0]!.y]?.[floorCells[0]!.x] ??
+                          DEFAULT_FLOOR,
+                      )}
+                      onChange={(e) => {
+                        const n = parseHexColor(e.target.value);
+                        editSel((L) => {
+                          for (const s of floorCells) {
+                            if ((L.walls[s.y]?.[s.x] ?? 0) === 0) {
+                              L.floors[s.y]![s.x] = n;
+                            }
+                          }
+                        });
+                      }}
+                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                    />
+                  </label>
                 </Section>
               ) : null}
             </div>
@@ -1210,23 +1232,23 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 {brush.kind === "wall" && brush.tex === 0 ? (
                   <>
                     <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
-                      Floor
-                      <input
-                        type="color"
-                        value={hexFromColor(emptyFloor)}
-                        onChange={(e) =>
-                          setEmptyFloor(parseHexColor(e.target.value))
-                        }
-                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
-                      />
-                    </label>
-                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
                       Ceiling
                       <input
                         type="color"
                         value={hexFromColor(emptyCeil)}
                         onChange={(e) =>
                           setEmptyCeil(parseHexColor(e.target.value))
+                        }
+                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                      Floor
+                      <input
+                        type="color"
+                        value={hexFromColor(emptyFloor)}
+                        onChange={(e) =>
+                          setEmptyFloor(parseHexColor(e.target.value))
                         }
                         className="h-6 w-8 cursor-pointer border-0 bg-transparent"
                       />
@@ -1317,6 +1339,18 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                       value={thingDest}
                       onChange={(e) => setThingDest(e.target.value)}
                       placeholder="name of a mark"
+                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                    />
+                  </label>
+                ) : null}
+                {brush.kind === "thing" && brush.thing === "pickup" ? (
+                  <label className="block text-[11px] text-muted">
+                    Text
+                    <input
+                      value={thingLabel}
+                      maxLength={3}
+                      onChange={(e) => setThingLabel(e.target.value.slice(0, 3))}
+                      placeholder="?"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -1513,6 +1547,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               applyBrushTo(next, x, y, brushRef.current, true, {
                 name: nameRef.current,
                 dest: destRef.current,
+                label: labelRef.current,
                 variant: variantRef.current,
                 floor: floorRef.current,
                 ceil: ceilRef.current,
@@ -1572,7 +1607,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           {ent.type === "exit" && "⎋"}
                           {ent.type === "door" && "▣"}
                           {ent.type === "teleport" && "◎"}
-                          {ent.type === "pickup" && "◆"}
+                          {ent.type === "pickup" && (ent.label || "?")}
                         </span>
                         {ent.name ? (
                           <span
@@ -1852,12 +1887,14 @@ function applyBrushTo(
   extra: {
     name: string;
     dest: string;
+    label: string;
     variant: EnemyVariant;
     floor: number;
     ceil: number;
   } = {
     name: "",
     dest: "",
+    label: "?",
     variant: "grunt",
     floor: DEFAULT_FLOOR,
     ceil: DEFAULT_CEIL,
@@ -1912,6 +1949,10 @@ function applyBrushTo(
     y: y + 0.5,
     name,
     dest: brush.thing === "teleport" ? extra.dest.trim() || undefined : undefined,
+    label:
+      brush.thing === "pickup"
+        ? (extra.label.trim() || "?").slice(0, 3)
+        : undefined,
     variant: brush.thing === "enemy" ? extra.variant : undefined,
     locked: brush.thing === "door" ? false : undefined,
   });
@@ -2044,6 +2085,7 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
       e.y,
       e.name ?? "",
       e.dest ?? "",
+      e.label ?? "",
       e.variant ?? "",
       e.locked ? 1 : 0,
     ].join(":");

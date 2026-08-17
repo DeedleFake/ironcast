@@ -227,7 +227,6 @@ function makePickup(r: number, g: number, b: number, glyph: string): ImageData {
       }
     }
   }
-  // simple glyph
   if (glyph === "+") {
     for (let i = -8; i <= 8; i++) {
       setPx(d, 32 + i, 32, 255, 255, 255, 255);
@@ -235,20 +234,70 @@ function makePickup(r: number, g: number, b: number, glyph: string): ImageData {
       setPx(d, 32 + i, 31, 255, 255, 255, 255);
       setPx(d, 31, 32 + i, 255, 255, 255, 255);
     }
-  } else {
-    for (let y = 24; y < 40; y++) {
-      for (let x = 24; x < 40; x++) {
-        if (
-          (x >= 26 && x <= 28) ||
-          (y >= 24 && y <= 26 && x <= 36) ||
-          (y >= 30 && y <= 32 && x <= 34) ||
-          (y >= 24 && x >= 34 && x <= 36)
-        ) {
-          setPx(d, x, y, 20, 20, 20, 255);
-        }
+  } else if (glyph) {
+    stampGlyph(d, glyph);
+  }
+  return img;
+}
+
+function makeCrystal(r: number, g: number, b: number): ImageData {
+  const img = new ImageData(TEX_SIZE, TEX_SIZE);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) d[i + 3] = 0;
+  for (let y = 10; y < 54; y++) {
+    for (let x = 10; x < 54; x++) {
+      const dx = Math.abs(x - 32);
+      const dy = Math.abs(y - 32);
+      if (dx / 14 + dy / 20 < 1) {
+        const edge = dx / 14 + dy / 20 > 0.82;
+        const hi = x < 32 ? 1.15 : 0.75;
+        setPx(
+          d,
+          x,
+          y,
+          edge ? r * 0.45 : r * hi,
+          edge ? g * 0.45 : g * hi,
+          edge ? b * 0.45 : b * hi,
+          255,
+        );
       }
     }
   }
+  return img;
+}
+
+function stampGlyph(d: Uint8ClampedArray, glyph: string) {
+  if (typeof document === "undefined") return;
+  const c = document.createElement("canvas");
+  c.width = TEX_SIZE;
+  c.height = TEX_SIZE;
+  const ctx = c.getContext("2d");
+  if (!ctx) return;
+  ctx.font = "700 16px ui-monospace, SFMono-Regular, Menlo, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#fff8e8";
+  ctx.fillText(glyph.slice(0, 3), 32, 33);
+  const src = ctx.getImageData(0, 0, TEX_SIZE, TEX_SIZE).data;
+  for (let i = 0; i < src.length; i += 4) {
+    if ((src[i + 3] ?? 0) > 90) {
+      d[i] = src[i]!;
+      d[i + 1] = src[i + 1]!;
+      d[i + 2] = src[i + 2]!;
+      d[i + 3] = 255;
+    }
+  }
+}
+
+const pickupCache = new Map<string, ImageData>();
+
+export function labeledPickup(label: string): ImageData {
+  const text = (label.trim() || "?").slice(0, 3);
+  const hit = pickupCache.get(text);
+  if (hit) return hit;
+  const img = makeCrystal(170, 70, 200);
+  stampGlyph(img.data, text);
+  pickupCache.set(text, img);
   return img;
 }
 
@@ -306,7 +355,7 @@ export function getTextures(): TextureAtlas {
     exit: makeExit(),
     door: makePickup(160, 90, 40, "D"),
     teleport: makePickup(80, 140, 220, "T"),
-    pickup: makePickup(180, 80, 200, "*"),
+    pickup: makeCrystal(170, 70, 200),
     weapon: makeWeapon(),
   };
   return cached;

@@ -7,6 +7,7 @@ import type { EnemyVariant, GameLevel, LevelEntity } from "./types";
 import { cloneLevel, uid } from "./types";
 import {
   getTextures,
+  labeledPickup,
   sampleSprite,
   sampleWall,
   type TextureAtlas,
@@ -39,6 +40,7 @@ export interface LiveEntity {
   attackCd: number;
   name: string;
   dest: string;
+  label: string;
   variant: EnemyVariant;
   locked: boolean;
   open: boolean;
@@ -186,6 +188,7 @@ function liveFromLevel(e: LevelEntity): LiveEntity {
     attackCd: 0.5 + Math.random() * 0.5,
     name: e.name || e.id,
     dest: e.dest || "",
+    label: (e.label || "").trim().slice(0, 3),
     variant,
     locked: !!e.locked,
     open: e.type === "door" ? false : true,
@@ -914,7 +917,7 @@ function getSpriteImg(ent: LiveEntity, atlas: TextureAtlas) {
   if (ent.type === "health") return atlas.health;
   if (ent.type === "door") return atlas.door;
   if (ent.type === "teleport") return atlas.teleport;
-  if (ent.type === "pickup") return atlas.pickup;
+  if (ent.type === "pickup") return labeledPickup(ent.label);
   return atlas.exit;
 }
 
