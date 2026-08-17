@@ -393,16 +393,37 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     return true;
   }, []);
 
-  const applySize = useCallback(() => {
-    const w = Math.max(MAP_MIN, Math.min(MAP_MAX, sizeW | 0));
-    const h = Math.max(MAP_MIN, Math.min(MAP_MAX, sizeH | 0));
+  const sizeWRef = useRef(sizeW);
+  sizeWRef.current = sizeW;
+  const sizeHRef = useRef(sizeH);
+  sizeHRef.current = sizeH;
+
+  const applySize = useCallback((rawW?: number, rawH?: number) => {
+    const srcW = rawW ?? sizeWRef.current;
+    const srcH = rawH ?? sizeHRef.current;
+    const w = Math.max(MAP_MIN, Math.min(MAP_MAX, (srcW | 0) || 0));
+    const h = Math.max(MAP_MIN, Math.min(MAP_MAX, (srcH | 0) || 0));
     setSizeW(w);
     setSizeH(h);
     const cur = levelRef.current;
     if (w === cur.width && h === cur.height) return;
     commitEdit(resizeLevel(cur, w, h));
     setStatus(`Map is now ${w}×${h}`);
-  }, [sizeW, sizeH, commitEdit]);
+  }, [commitEdit]);
+
+  const onSizeW = (raw: number) => {
+    setSizeW(raw);
+    if (Number.isInteger(raw) && raw >= MAP_MIN && raw <= MAP_MAX) {
+      applySize(raw, sizeHRef.current);
+    }
+  };
+
+  const onSizeH = (raw: number) => {
+    setSizeH(raw);
+    if (Number.isInteger(raw) && raw >= MAP_MIN && raw <= MAP_MAX) {
+      applySize(sizeWRef.current, raw);
+    }
+  };
 
   useEffect(() => {
     setSizeW(level.width);
@@ -817,9 +838,40 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         <input
           value={level.name}
           onChange={(e) => setLevel((l) => ({ ...l, name: e.target.value }))}
-          className="min-w-0 flex-1 rounded-md border border-border bg-surface-2 px-2 py-1.5 font-display text-sm font-semibold tracking-wide text-fg uppercase outline-none focus:border-primary sm:max-w-xs"
+          className="min-w-0 w-36 rounded-md border border-border bg-surface-2 px-2 py-1.5 font-display text-sm font-semibold tracking-wide text-fg uppercase outline-none focus:border-primary sm:w-48"
           aria-label="Level name"
         />
+        <div className="flex items-center gap-1">
+          <input
+            type="number"
+            min={MAP_MIN}
+            max={MAP_MAX}
+            value={Number.isFinite(sizeW) ? sizeW : ""}
+            onChange={(e) => onSizeW(Number(e.target.value))}
+            onBlur={() => applySize()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+            className="w-14 rounded-md border border-border bg-surface-2 px-1.5 py-1.5 text-center font-mono text-sm text-fg outline-none focus:border-primary"
+            aria-label="Map width"
+            title={`Width (${MAP_MIN}–${MAP_MAX})`}
+          />
+          <span className="text-sm text-muted">×</span>
+          <input
+            type="number"
+            min={MAP_MIN}
+            max={MAP_MAX}
+            value={Number.isFinite(sizeH) ? sizeH : ""}
+            onChange={(e) => onSizeH(Number(e.target.value))}
+            onBlur={() => applySize()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+            className="w-14 rounded-md border border-border bg-surface-2 px-1.5 py-1.5 text-center font-mono text-sm text-fg outline-none focus:border-primary"
+            aria-label="Map height"
+            title={`Height (${MAP_MIN}–${MAP_MAX})`}
+          />
+        </div>
         <div className="flex items-center gap-0.5">
           <IconBtn
             title="Undo (Ctrl+Z)"
@@ -1883,36 +1935,6 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
 
       <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-surface px-3 py-1.5 text-[11px] text-muted">
         <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <label className="flex items-center gap-1">
-            Size
-            <input
-              type="number"
-              min={MAP_MIN}
-              max={MAP_MAX}
-              value={sizeW}
-              onChange={(e) => setSizeW(Number(e.target.value))}
-              onBlur={applySize}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              }}
-              className="w-12 rounded border border-border bg-surface-2 px-1 py-0.5 text-center font-mono text-[11px] text-fg outline-none focus:border-primary"
-              aria-label="Map width"
-            />
-            ×
-            <input
-              type="number"
-              min={MAP_MIN}
-              max={MAP_MAX}
-              value={sizeH}
-              onChange={(e) => setSizeH(Number(e.target.value))}
-              onBlur={applySize}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              }}
-              className="w-12 rounded border border-border bg-surface-2 px-1 py-0.5 text-center font-mono text-[11px] text-fg outline-none focus:border-primary"
-              aria-label="Map height"
-            />
-          </label>
           <span>
             {level.entities.length} placed ·{" "}
             {tool === "select"
@@ -2267,8 +2289,8 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
     const br = b.walls[y]!;
     for (let x = 0; x < a.width; x++) {
       if (ar[x] !== br[x]) return false;
-      if ((a.floors[y]?.[x] ?? 0) !== (b.floors[y]?.[x] ?? 0)) return false;
-      if ((a.ceils[y]?.[x] ?? 0) !== (b.ceils[y]?.[x] ?? 0)) return false;
+      if ((a.floors?.[y]?.[x] ?? 0) !== (b.floors?.[y]?.[x] ?? 0)) return false;
+      if ((a.ceils?.[y]?.[x] ?? 0) !== (b.ceils?.[y]?.[x] ?? 0)) return false;
       if ((a.wallColors?.[y]?.[x] ?? 0) !== (b.wallColors?.[y]?.[x] ?? 0)) {
         return false;
       }

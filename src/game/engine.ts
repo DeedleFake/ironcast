@@ -302,13 +302,20 @@ function fireWeapon(state: GameState) {
     best.hurtFlash = 0.15;
     state.hitmarker = 0.12;
     sfx.hit();
-    runScript(state, "hurt", [str(best.name), num(HITSCAN_DAMAGE)]);
+    runScript(state, "hurt", {
+      target: str(best.name),
+      amount: num(HITSCAN_DAMAGE),
+    });
     if (best.hp <= 0) {
       best.alive = false;
       state.kills += 1;
       state.score += 100;
       sfx.enemyDie();
-      runScript(state, "die", [str(best.name), num(best.x), num(best.y)]);
+      runScript(state, "die", {
+        enemy: str(best.name),
+        x: num(best.x),
+        y: num(best.y),
+      });
       if (state.kills >= state.totalEnemies && state.totalEnemies > 0) {
         state.message = "They're down — find the exit";
       }
@@ -323,11 +330,11 @@ function fireWeapon(state: GameState) {
       (m) => m.x === wall.x && m.y === wall.y,
     );
     const who = door?.name || mark?.name || null;
-    runScript(state, "shoot", [
-      str(who ?? ""),
-      num(wall.x),
-      num(wall.y),
-    ]);
+    runScript(state, "shoot", {
+      target: str(who ?? ""),
+      x: num(wall.x),
+      y: num(wall.y),
+    });
   }
 }
 
@@ -406,7 +413,10 @@ function updateEnemies(state: GameState, dt: number) {
       state.health -= stats.damage;
       state.shake = Math.max(state.shake, 0.7);
       sfx.hurt();
-      runScript(state, "hurt", [str("player"), num(stats.damage)]);
+      runScript(state, "hurt", {
+        target: str("player"),
+        amount: num(stats.damage),
+      });
       if (state.health <= 0) {
         state.health = 0;
         state.mode = "dead";
@@ -491,18 +501,18 @@ function updatePickups(state: GameState) {
       state.ammo = Math.min(MAX_AMMO, state.ammo + 15);
       state.score += 10;
       sfx.pickup();
-      runScript(state, "pickup", [str(e.name)]);
+      runScript(state, "pickup", { target: str(e.name) });
     } else if (e.type === "health") {
       e.alive = false;
       state.health = Math.min(100, state.health + 25);
       state.score += 10;
       sfx.pickup();
-      runScript(state, "pickup", [str(e.name)]);
+      runScript(state, "pickup", { target: str(e.name) });
     } else if (e.type === "pickup") {
       e.alive = false;
       sfx.pickup();
       state.inventory.add(e.name);
-      runScript(state, "pickup", [str(e.name)]);
+      runScript(state, "pickup", { target: str(e.name) });
     } else if (e.type === "teleport") {
       if (state.teleportCd > 0 || !e.dest) continue;
       const destEnt = findNamed(state, e.dest);
@@ -517,7 +527,7 @@ function updatePickups(state: GameState) {
         state.py = dest.y;
         state.teleportCd = 0.85;
         sfx.pickup();
-        runScript(state, "teleport", [str(e.name)]);
+        runScript(state, "teleport", { pad: str(e.name) });
       }
     } else if (e.type === "exit") {
       if (state.kills >= state.totalEnemies) {
@@ -623,16 +633,20 @@ export function updateGame(state: GameState, dt: number) {
         state.scriptError = err instanceof Error ? err.message : "Script error";
         state.message = state.scriptError;
       }
-      runScript(state, "start", []);
+      runScript(state, "start", {});
     }
     if (state.scriptError) state.message = state.scriptError;
   }
 }
 
-function runScript(state: GameState, event: string, args: LispVal[]) {
+function runScript(
+  state: GameState,
+  event: string,
+  named: Record<string, LispVal>,
+) {
   if (!state.script || state.mode === "dead") return;
   try {
-    fireHandlers(state.script, state.scriptEnv, makeHost(state), event, args);
+    fireHandlers(state.script, state.scriptEnv, makeHost(state), event, named);
   } catch (err) {
     state.scriptError = err instanceof Error ? err.message : "Script error";
     state.message = state.scriptError;
@@ -808,7 +822,7 @@ function tryUse(state: GameState) {
       sfx.click?.();
     }
   }
-  if (who) runScript(state, "use", [str(who), num(cx), num(cy)]);
+  if (who) runScript(state, "use", { target: str(who), x: num(cx), y: num(cy) });
 }
 
 function updateUseHint(state: GameState) {
@@ -846,10 +860,10 @@ function updateZones(state: GameState) {
     }
   }
   for (const name of now) {
-    if (!state.zonesHere.has(name)) runScript(state, "enter", [str(name)]);
+    if (!state.zonesHere.has(name)) runScript(state, "enter", { zone: str(name) });
   }
   for (const name of state.zonesHere) {
-    if (!now.has(name)) runScript(state, "leave", [str(name)]);
+    if (!now.has(name)) runScript(state, "leave", { zone: str(name) });
   }
   state.zonesHere = now;
 }

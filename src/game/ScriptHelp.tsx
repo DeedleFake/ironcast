@@ -1,38 +1,39 @@
 import { useState } from "react";
 
-const SAMPLE = `(def (announce msg)
+const SAMPLE = `(def announce (msg)
   (say (str ">> " msg)))
 
 (on start ()
   (announce "Find the red key.")
   (lock "door-armory"))
 
-(on pickup (who)
-  (when (= who "key-red")
+(on pickup (target:)
+  (if (= target "key-red")
     (unlock "door-armory")
     (announce "Armory unlocked.")))
 
-(on use (who)
-  (when (= who "door-armory")
+(on use (target:)
+  (if (= target "door-armory")
     (if (locked? "door-armory")
       (say "Locked. Need the red key.")
+    else
       (open "door-armory"))))
 
-(on enter (zone)
-  (when (= zone "ambush")
-    (unless (get "sprung")
-      (spawn "enemy" 14.5 8.5 "grunt-a")
+(on enter (zone:)
+  (if (= zone "ambush")
+    (if not (get "sprung")
+      (spawn type: "enemy" x: 14.5 y: 8.5 name: "grunt-a")
       (say "Ambush!")
       (set "sprung" true))))
 
-(on die (who)
-  (when (= who "grunt-a")
+(on die (enemy:)
+  (if (= enemy "grunt-a")
     (after 1
       (open "door-exit"))))
 
-(on shoot (who)
-  (when (= who "panel")
-    (set-wall who 0)
+(on shoot (target:)
+  (if (= target "panel")
+    (set-wall target 0)
     (give "ammo" 20)))
 `;
 
@@ -166,8 +167,26 @@ function Intro() {
       <Block>
         <H>Limits</H>
         <p>
-          A script that runs too long stops. The limit is 8000 steps. The
+          A step is one evaluation of a form. A name lookup is a step. A
+          number is a step. A function call is a step, and each argument is a
+          step too.
+        </p>
+        <p>
+          The limit is 8000 steps. A run that hits the limit stops. The
           message is <Code>script ran too long</Code>.
+        </p>
+        <p>
+          The count starts at 8000 when the fight starts, for every top-level
+          form that is not an <Code>on</Code> handler.
+        </p>
+        <p>
+          The count starts at 8000 again each time one <Code>on</Code> handler
+          runs. Two handlers for the same event each get their own 8000
+          steps.
+        </p>
+        <p>
+          <Code>after</Code> does not start a new count. It uses the steps
+          that remain from the handler that queued it.
         </p>
         <p>
           <Code>(on ...)</Code> is valid only at the top of the file. A nested{" "}
@@ -347,21 +366,28 @@ function Keywords() {
         </p>
       </Block>
       <Block>
-        <H>if, when, unless</H>
+        <H>if and else</H>
         <p>
-          <Code>(if test then else)</Code> runs <Code>then</Code> when{" "}
-          <Code>test</Code> is true. The form runs <Code>else</Code> when{" "}
-          <Code>test</Code> is false. A missing <Code>else</Code> is{" "}
-          <Code>nil</Code>.
+          <Code>if</Code> runs a branch. Every form after the test and before{" "}
+          <Code>else</Code> is the true branch. Every form after{" "}
+          <Code>else</Code> is the false branch. The result is the last form
+          of the branch that ran.
         </p>
         <p>
-          <Code>(when test ...)</Code> runs each body form when{" "}
-          <Code>test</Code> is true. The result is the last body form.
+          A missing <Code>else</Code> means the false branch is{" "}
+          <Code>nil</Code>. <Code>else if</Code> adds another test.{" "}
+          <Code>if not</Code> and <Code>else if not</Code> flip the test.
         </p>
-        <p>
-          <Code>(unless test ...)</Code> runs each body form when{" "}
-          <Code>test</Code> is false.
-        </p>
+        <p>Example:</p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
+          {`(if (locked? "door-armory")
+  (say "Locked.")
+  (say "Find the key.")
+else if (has "key-red")
+  (open "door-armory")
+else
+  (say "Still locked."))`}
+        </pre>
       </Block>
       <Block>
         <H>and, or, not</H>
@@ -379,13 +405,6 @@ function Keywords() {
         </p>
       </Block>
       <Block>
-        <H>do</H>
-        <p>
-          <Code>(do ...)</Code> runs each form in order. The result is the
-          last form.
-        </p>
-      </Block>
-      <Block>
         <H>let</H>
         <p>
           <Code>(let ((n 1) (m 2)) ...)</Code> makes local names for the
@@ -399,13 +418,33 @@ function Keywords() {
           <Code>(def name value)</Code> stores a value under a name.
         </p>
         <p>
-          <Code>(def (announce msg) ...)</Code> makes a function. The first
-          name in the list is the function name. The other names are
-          parameters. The rest of the form is the body.
+          <Code>(def announce (msg) ...)</Code> makes a function. The form
+          matches <Code>on</Code>: the name, then a parameter list, then the
+          body.
         </p>
         <p>
           <Code>(announce "Find the red key.")</Code> then runs that
           function. <Code>announce</Code> is not a built-in function.
+        </p>
+      </Block>
+      <Block>
+        <H>Keyword arguments</H>
+        <p>
+          A word that ends in <Code>:</Code> is a key. A key and the next
+          value are a pair. The order of pairs does not matter.
+        </p>
+        <p>
+          <Code>(def example (an-arg: other:) ...)</Code> makes a function
+          that takes keys. The body uses <Code>an-arg</Code> and{" "}
+          <Code>other</Code> with no colon.
+        </p>
+        <p>
+          <Code>(example other: 2 an-arg: 1)</Code> calls that function. A
+          missing key binds <Code>nil</Code>. An unknown key is an error.
+        </p>
+        <p>
+          Do not mix positional parameters and keyword parameters in one
+          list.
         </p>
       </Block>
       <Block>
@@ -424,7 +463,7 @@ function Keywords() {
         <H>after</H>
         <p>
           <Code>(after seconds ...)</Code> waits that many seconds. Then the
-          body runs. <Code>(after 1 (open door-exit))</Code> opens that door
+          body runs. <Code>(after 1 (open "door-exit"))</Code> opens that door
           after one second. The form can hold more than one body form.
         </p>
       </Block>
@@ -549,20 +588,18 @@ function Events() {
         <H>The on form</H>
         <p>
           An <Code>(on ...)</Code> form is valid only at the top of the
-          script. The form is <Code>(on event (args...) body...)</Code>.
+          script. The form is the same shape as a function:{" "}
+          <Code>(on event (args...) body...)</Code>.
         </p>
         <p>
-          <Code>event</Code> is a word such as <Code>enter</Code>. The
-          parameter list binds values that the event passes. You pick the
-          parameter names.
+          Use keys in the parameter list so the order does not matter.{" "}
+          <Code>(on shoot (target: x: y:) ...)</Code> binds those values.{" "}
+          <Code>(on shoot (target:) ...)</Code> binds only <Code>target</Code>.
         </p>
         <p>
-          You can bind fewer parameters than the event provides. Extra values
-          are dropped.
-        </p>
-        <p>
-          The body runs for every match of that event. Use <Code>if</Code> or{" "}
-          <Code>when</Code> to compare a parameter to a string.
+          A missing key binds <Code>nil</Code>. The body runs for every match
+          of that event. Use <Code>if</Code> to compare a parameter to a
+          string.
         </p>
       </Block>
       <Block>
@@ -572,35 +609,35 @@ function Events() {
             <Code>(on start () ...)</Code> runs when the fight begins.
           </li>
           <li>
-            <Code>(on enter (zone) ...)</Code> runs when the player walks
+            <Code>(on enter (zone:) ...)</Code> runs when the player walks
             into a zone. <Code>zone</Code> is a string.
           </li>
           <li>
-            <Code>(on leave (zone) ...)</Code> runs when the player leaves a
+            <Code>(on leave (zone:) ...)</Code> runs when the player leaves a
             zone.
           </li>
           <li>
-            <Code>(on use (who x y) ...)</Code> runs when the player presses
-            E on a thing or a mark.
+            <Code>(on use (target: x: y:) ...)</Code> runs when the player
+            presses E on a thing or a mark.
           </li>
           <li>
-            <Code>(on shoot (who x y) ...)</Code> runs when a shot hits a
+            <Code>(on shoot (target: x: y:) ...)</Code> runs when a shot hits a
             mark or a door. A wall with no name passes an empty string.
           </li>
           <li>
-            <Code>(on die (who x y) ...)</Code> runs when an enemy dies.
+            <Code>(on die (enemy: x: y:) ...)</Code> runs when an enemy dies.
           </li>
           <li>
-            <Code>(on pickup (who) ...)</Code> runs when the player takes an
+            <Code>(on pickup (target:) ...)</Code> runs when the player takes an
             item. Ammo, health, and pickups all fire this event.
           </li>
           <li>
-            <Code>(on hurt (who amount) ...)</Code> runs when the player or
-            an enemy takes damage. For the player, <Code>who</Code> is{" "}
+            <Code>(on hurt (target: amount:) ...)</Code> runs when the player or
+            an enemy takes damage. For the player, <Code>target</Code> is{" "}
             <Code>"player"</Code>.
           </li>
           <li>
-            <Code>(on teleport (who) ...)</Code> runs when the player uses a
+            <Code>(on teleport (pad:) ...)</Code> runs when the player uses a
             pad.
           </li>
         </ul>
@@ -690,36 +727,30 @@ function Commands() {
         <H>spawn</H>
         <p>
           <Code>spawn</Code> adds a thing to the map. The command returns the
-          name of the new thing.
+          name of the new thing. The call uses keys only.
         </p>
-        <ul className="list-disc space-y-1 pl-5">
-          <li>
-            <Code>(spawn type x y)</Code>
-          </li>
-          <li>
-            <Code>(spawn type x y name)</Code>
-          </li>
-          <li>
-            <Code>(spawn type x y name variant)</Code>
-          </li>
-        </ul>
         <p>
-          <Code>type</Code> is a string: <Code>"enemy"</Code>,{" "}
+          Required keys are <Code>type:</Code>, <Code>x:</Code>, and{" "}
+          <Code>y:</Code>. Optional keys are <Code>name:</Code> and{" "}
+          <Code>variant:</Code>.
+        </p>
+        <p>
+          <Code>type:</Code> is a string: <Code>"enemy"</Code>,{" "}
           <Code>"ammo"</Code>, <Code>"health"</Code>,{" "}
           <Code>"exit"</Code>, <Code>"door"</Code>,{" "}
           <Code>"teleport"</Code>, or{" "}
           <Code>"pickup"</Code>.
         </p>
         <p>
-          <Code>x</Code> and <Code>y</Code> are map positions. The center of
-          a cell is a number that ends in <Code>.5</Code>.
+          <Code>x:</Code> and <Code>y:</Code> are map positions. The center
+          of a cell is a number that ends in <Code>.5</Code>.
         </p>
         <p>
-          <Code>name</Code> is a string. You can build it with{" "}
+          <Code>name:</Code> is a string. You can build it with{" "}
           <Code>str</Code>. If the name is missing, the game makes an id.
         </p>
         <p>
-          <Code>variant</Code> is only for an enemy. The value is{" "}
+          <Code>variant:</Code> is only for an enemy. The value is{" "}
           <Code>"grunt"</Code> or <Code>"bruiser"</Code>.
           If the variant is missing, the enemy is a grunt.
         </p>
@@ -731,20 +762,27 @@ function Commands() {
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>
-              (spawn "enemy" 11.5 6.5 "warden"
-              "bruiser")
+              (spawn type: "enemy" x: 11.5 y: 6.5 name:
+              "warden" variant: "bruiser")
             </Code>
           </li>
           <li>
             <Code>
-              (spawn "enemy" 11.5 6.5 (str "enemy-" n))
+              (spawn type: "enemy" x: 11.5 y: 6.5 name: (str
+              "enemy-" n))
             </Code>
           </li>
           <li>
-            <Code>(spawn "ammo" 8.5 10.5 "pack-a")</Code>
+            <Code>
+              (spawn type: "ammo" x: 8.5 y: 10.5 name:
+              "pack-a")
+            </Code>
           </li>
           <li>
-            <Code>(spawn "door" 9.5 3.5 "door-cell")</Code>
+            <Code>
+              (spawn type: "door" x: 9.5 y: 3.5 name:
+              "door-cell")
+            </Code>
           </li>
         </ul>
       </Block>
