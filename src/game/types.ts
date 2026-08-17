@@ -22,7 +22,8 @@ export type EntityType =
   | "exit"
   | "door"
   | "teleport"
-  | "pickup";
+  | "pickup"
+  | "button";
 
 export type EnemyVariant = "grunt" | "bruiser";
 
@@ -43,6 +44,8 @@ export interface LevelEntity {
   color?: number;
   variant?: EnemyVariant;
   locked?: boolean;
+  /** Button is hidden and cannot be used. */
+  disabled?: boolean;
 }
 
 export interface PlayerSpawn {
@@ -61,7 +64,7 @@ export interface LevelZone {
   h: number;
 }
 
-/** Named cell — shoot/use/set-wall by id */
+/** Named cell — spawn, teleport, set-wall, shoot by id */
 export interface LevelMark {
   key: string;
   id?: string;

@@ -38,7 +38,7 @@ Each wall pattern has a default color. If you keep that color, the wall looks li
 
 ### Things
 
-You can place spawn, enemies, ammo, health, an exit, doors, pads, and pickups. A pickup has short text and a color. A pad sends the player to a mark. A script refers to a door, pickup, zone, or mark by name.
+You can place spawn, enemies, ammo, health, an exit, doors, pads, pickups, and buttons. A pickup has short text and a color. A pad sends the player to a mark. A button is a use point. The player cannot see it. You can put a button on a wall. A disabled button does not show a use prompt. A mark names a cell. The player cannot use a mark. A script refers to a thing, zone, or mark by name.
 
 ### How to edit a map
 

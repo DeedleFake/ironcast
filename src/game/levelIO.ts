@@ -243,6 +243,7 @@ function coerceEntity(e: unknown): LevelEntity | null {
     "door",
     "teleport",
     "pickup",
+    "button",
   ];
   if (typeof o.type !== "string" || !types.includes(o.type) || !isNum(o.x) || !isNum(o.y)) {
     return null;
@@ -257,6 +258,7 @@ function coerceEntity(e: unknown): LevelEntity | null {
     color: isNum(o.color) ? o.color : undefined,
     variant: o.variant === "bruiser" ? "bruiser" : o.variant === "grunt" ? "grunt" : undefined,
     locked: typeof o.locked === "boolean" ? o.locked : undefined,
+    disabled: o.disabled === true ? true : undefined,
   });
   return ent;
 }
@@ -400,6 +402,7 @@ export function toSavedLevel(level: GameLevel): Record<string, unknown> {
     if (e.color !== undefined && e.color !== DEFAULT_PICKUP) out.color = e.color;
     if (e.variant === "bruiser") out.variant = "bruiser";
     if (e.locked) out.locked = true;
+    if (e.disabled) out.disabled = true;
     return out;
   };
   const stripZone = (z: LevelZone) => {

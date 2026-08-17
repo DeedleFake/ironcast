@@ -97,6 +97,9 @@ export const BUILTINS = new Set([
   "unlock",
   "locked?",
   "open?",
+  "enable",
+  "disable",
+  "disabled?",
   "set-wall",
   "spawn",
   "remove",
@@ -668,6 +671,9 @@ export type Host = {
   unlock: (name: string) => boolean;
   isLocked: (name: string) => boolean;
   isOpen: (name: string) => boolean;
+  enable: (name: string) => boolean;
+  disable: (name: string) => boolean;
+  isDisabled: (name: string) => boolean;
   setWall: (opts: SetWallOpts) => boolean;
   spawn: (opts: {
     type: string;
@@ -680,6 +686,7 @@ export type Host = {
     label?: string;
     color?: number;
     locked?: boolean;
+    disabled?: boolean;
   }) => string | null;
   remove: (name: string) => boolean;
   teleport: (who: string, dest: LispVal, y?: LispVal) => boolean;
@@ -1308,6 +1315,12 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       return bool(h.isLocked(asName(args[0] ?? nil())));
     case "open?":
       return bool(h.isOpen(asName(args[0] ?? nil())));
+    case "enable":
+      return bool(h.enable(asName(args[0] ?? nil())));
+    case "disable":
+      return bool(h.disable(asName(args[0] ?? nil())));
+    case "disabled?":
+      return bool(h.isDisabled(asName(args[0] ?? nil())));
     case "set-wall": {
       if (call.pos.length) {
         throw new LispError("set-wall needs keys");
@@ -1354,6 +1367,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         "label",
         "color",
         "locked",
+        "disabled",
       ];
       for (const key of call.keys.keys()) {
         if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
@@ -1370,6 +1384,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       const label = call.keys.get("label");
       const color = call.keys.get("color");
       const locked = call.keys.get("locked");
+      const disabled = call.keys.get("disabled");
       if (variant && kind !== "enemy") {
         throw new LispError("variant: is only for enemy");
       }
@@ -1381,6 +1396,9 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       }
       if (locked && kind !== "door") {
         throw new LispError("locked: is only for door");
+      }
+      if (disabled && kind !== "button") {
+        throw new LispError("disabled: is only for button");
       }
       const publicId = call.keys.get("id");
       const made = h.spawn({
@@ -1394,6 +1412,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         label: label ? asName(label) : undefined,
         color: color ? asColor(color, "color") : undefined,
         locked: locked ? truthy(locked) : undefined,
+        disabled: disabled ? truthy(disabled) : undefined,
       });
       if (made === null) throw new LispError("spawn at: not found");
       return str(made);

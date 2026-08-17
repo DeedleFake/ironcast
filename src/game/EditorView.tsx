@@ -34,6 +34,7 @@ import { compileProgram } from "./lisp";
 import {
   ArrowLeft,
   BoxSelect,
+  CircleDot,
   DoorClosed,
   Eraser,
   Heart,
@@ -123,6 +124,7 @@ const THINGS: { id: ThingKind; label: string; icon: React.ReactNode }[] = [
   { id: "door", label: "Door", icon: <DoorClosed className="size-4" /> },
   { id: "teleport", label: "Pad", icon: <Spline className="size-4" /> },
   { id: "pickup", label: "Pickup", icon: <Star className="size-4" /> },
+  { id: "button", label: "Button", icon: <CircleDot className="size-4" /> },
 ];
 
 const AREAS: { id: "zone" | "mark"; label: string; icon: React.ReactNode }[] = [
@@ -242,7 +244,8 @@ type SelOpt =
   | "turn"
   | "label"
   | "color"
-  | "wallColor";
+  | "wallColor"
+  | "disabled";
 
 function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
   if (s.k === "cell") {
@@ -252,11 +255,12 @@ function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
       : new Set<SelOpt>(["texture", "wallColor"]);
   }
   if (s.k === "entity") {
-    const e = level.entities.find((x) => x.id === s.id);
+    const e = level.entities.find((x) => x.key === s.id);
     if (!e) return new Set();
     if (e.type === "enemy") return new Set<SelOpt>(["variant", "name"]);
     if (e.type === "teleport") return new Set<SelOpt>(["name", "dest"]);
     if (e.type === "pickup") return new Set<SelOpt>(["name", "label", "color"]);
+    if (e.type === "button") return new Set<SelOpt>(["name", "disabled"]);
     return new Set<SelOpt>(["name"]);
   }
   if (s.k === "mark" || s.k === "zone") return new Set<SelOpt>(["name"]);
@@ -324,6 +328,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [thingLabel, setThingLabel] = useState("?");
   const [thingColor, setThingColor] = useState(DEFAULT_PICKUP);
   const [variant, setVariant] = useState<EnemyVariant>("grunt");
+  const [thingDisabled, setThingDisabled] = useState(false);
   const [emptyFloor, setEmptyFloor] = useState(DEFAULT_FLOOR);
   const [emptyCeil, setEmptyCeil] = useState(DEFAULT_CEIL);
   const [sizeW, setSizeW] = useState(level.width);
@@ -356,6 +361,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   colorRef.current = thingColor;
   const variantRef = useRef(variant);
   variantRef.current = variant;
+  const disabledRef = useRef(thingDisabled);
+  disabledRef.current = thingDisabled;
   const floorRef = useRef(emptyFloor);
   floorRef.current = emptyFloor;
   const wallColorRef = useRef(wallColor);
@@ -613,6 +620,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         label: labelRef.current,
         color: colorRef.current,
         variant: variantRef.current,
+        disabled: disabledRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
         wallColor: wallColorRef.current,
@@ -633,6 +641,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         label: labelRef.current,
         color: colorRef.current,
         variant: variantRef.current,
+        disabled: disabledRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
         wallColor: wallColorRef.current,
@@ -661,6 +670,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       setThingLabel(ent.label || "?");
       setThingColor(ent.color ?? DEFAULT_PICKUP);
       setVariant(ent.variant === "bruiser" ? "bruiser" : "grunt");
+      setThingDisabled(!!ent.disabled);
       setStatus(`Picked ${ent.id || ent.type}`);
       return;
     }
@@ -825,7 +835,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     can.has("turn") ||
     can.has("label") ||
     can.has("color") ||
-    can.has("wallColor");
+    can.has("wallColor") ||
+    can.has("disabled");
   const floorTitle = occupantCount > 0 ? "Ground" : "Empty";
   const hasSpawn = liveSel.some((s) => s.k === "spawn");
   const singleEnt = liveSel.length === 1 && liveSel[0]!.k === "entity" ? selEnts[0] : null;
@@ -1196,15 +1207,42 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     }
                     onChange={(n) => {
                       const ids = new Set(
-                        selEnts.filter((x) => x.type === "pickup").map((x) => x.id),
+                        selEnts.filter((x) => x.type === "pickup").map((x) => x.key),
                       );
                       editSel((L) => {
                         for (const ent of L.entities) {
-                          if (ids.has(ent.id)) ent.color = n;
+                          if (ids.has(ent.key)) ent.color = n;
                         }
                       });
                     }}
                   />
+                ) : null}
+                {can.has("disabled") ? (
+                  <div className="flex gap-1">
+                    {([false, true] as const).map((off) => (
+                      <button
+                        key={off ? "off" : "on"}
+                        type="button"
+                        onClick={() => {
+                          const keys = new Set(
+                            selEnts.filter((x) => x.type === "button").map((x) => x.key),
+                          );
+                          editSel((L) => {
+                            for (const ent of L.entities) {
+                              if (keys.has(ent.key)) ent.disabled = off;
+                            }
+                          });
+                        }}
+                        className={`flex-1 rounded-md border px-2 py-1 text-[11px] ${
+                          (selEnts.find((e) => e.type === "button")?.disabled ?? false) === off
+                            ? "border-primary bg-primary/15 text-fg"
+                            : "border-border text-muted"
+                        }`}
+                      >
+                        {off ? "Disabled" : "Enabled"}
+                      </button>
+                    ))}
+                  </div>
                 ) : null}
                 {can.has("wallColor") ? (
                   <ColorPick
@@ -1484,6 +1522,24 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     />
                   </>
                 ) : null}
+                {brush.kind === "thing" && brush.thing === "button" ? (
+                  <div className="flex gap-1">
+                    {([false, true] as const).map((off) => (
+                      <button
+                        key={off ? "off" : "on"}
+                        type="button"
+                        onClick={() => setThingDisabled(off)}
+                        className={`flex-1 rounded-md border px-2 py-1 text-[11px] ${
+                          thingDisabled === off
+                            ? "border-primary bg-primary/15 text-fg"
+                            : "border-border text-muted"
+                        }`}
+                      >
+                        {off ? "Disabled" : "Enabled"}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
                 {isZoneBrush(brush) ? (
                   <p className="text-[10px] leading-snug text-dim">
                     Drag a box to name a region.
@@ -1702,6 +1758,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 label: labelRef.current,
                 color: colorRef.current,
                 variant: variantRef.current,
+                disabled: disabledRef.current,
                 floor: floorRef.current,
                 ceil: ceilRef.current,
                 wallColor: wallColorRef.current,
@@ -1758,7 +1815,9 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     {ent && (
                       <>
                         <span
-                          className="absolute inset-0 flex items-center justify-center text-[11px] text-fg"
+                          className={`absolute inset-0 flex items-center justify-center text-[11px] text-fg ${
+                            ent.disabled ? "opacity-40" : ""
+                          }`}
                           style={
                             ent.type === "pickup"
                               ? { color: hexFromColor(ent.color ?? DEFAULT_PICKUP) }
@@ -1774,6 +1833,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           {ent.type === "door" && "▯"}
                           {ent.type === "teleport" && "◎"}
                           {ent.type === "pickup" && (ent.label || "?")}
+                          {ent.type === "button" && "●"}
                         </span>
                         {ent.id ? (
                           <span
@@ -2214,6 +2274,7 @@ function applyBrushTo(
     label: string;
     color: number;
     variant: EnemyVariant;
+    disabled: boolean;
     floor: number;
     ceil: number;
     wallColor: number;
@@ -2223,6 +2284,7 @@ function applyBrushTo(
     label: "?",
     color: DEFAULT_PICKUP,
     variant: "grunt",
+    disabled: false,
     floor: DEFAULT_FLOOR,
     ceil: DEFAULT_CEIL,
     wallColor: defaultWallColor(1),
@@ -2245,7 +2307,7 @@ function applyBrushTo(
       level.ceils[y]![x] = extra.ceil;
     } else {
       level.wallColors[y]![x] = extra.wallColor;
-      removeEntityAt(level, x, y);
+      removeEntityAt(level, x, y, true);
     }
     return;
   }
@@ -2258,6 +2320,22 @@ function applyBrushTo(
     return;
   }
   if (brush.thing === "zone") return;
+  if (brush.thing === "button") {
+    level.entities = level.entities.filter(
+      (e) =>
+        !(e.type === "button" && Math.floor(e.x) === x && Math.floor(e.y) === y),
+    );
+    level.entities.push(
+      withKey({
+        id,
+        type: "button",
+        x: x + 0.5,
+        y: y + 0.5,
+        disabled: extra.disabled,
+      }),
+    );
+    return;
+  }
   level.walls[y]![x] = 0;
   if (brush.thing === "spawn") {
     level.spawn = { x: x + 0.5, y: y + 0.5, angle: level.spawn.angle };
@@ -2470,10 +2548,12 @@ function moveSelection(
   });
 }
 
-function removeEntityAt(level: GameLevel, x: number, y: number) {
-  level.entities = level.entities.filter(
-    (e) => !(Math.floor(e.x) === x && Math.floor(e.y) === y),
-  );
+function removeEntityAt(level: GameLevel, x: number, y: number, keepButtons = false) {
+  level.entities = level.entities.filter((e) => {
+    if (Math.floor(e.x) !== x || Math.floor(e.y) !== y) return true;
+    if (keepButtons && e.type === "button") return true;
+    return false;
+  });
 }
 
 function cellKey(level: GameLevel, x: number, y: number): string {

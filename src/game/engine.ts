@@ -47,6 +47,7 @@ export interface LiveEntity {
   variant: EnemyVariant;
   locked: boolean;
   open: boolean;
+  disabled: boolean;
   path: { x: number; y: number }[] | null;
   pathAge: number;
 }
@@ -223,6 +224,7 @@ function liveFromLevel(e: LevelEntity): LiveEntity {
     variant,
     locked: !!e.locked,
     open: e.type === "door" ? false : true,
+    disabled: !!e.disabled,
     path: null,
     pathAge: 0,
   };
@@ -751,6 +753,22 @@ function makeHost(state: GameState): Host {
     unlock: (name) => setDoor(name, { locked: false }),
     isLocked: (name) => !!findNamed(state, name)?.locked,
     isOpen: (name) => !!findNamed(state, name)?.open,
+    enable: (name) => {
+      const e = findNamed(state, name);
+      if (!e || e.type !== "button") return false;
+      e.disabled = false;
+      return true;
+    },
+    disable: (name) => {
+      const e = findNamed(state, name);
+      if (!e || e.type !== "button") return false;
+      e.disabled = true;
+      return true;
+    },
+    isDisabled: (name) => {
+      const e = findNamed(state, name);
+      return !!e && e.type === "button" && e.disabled;
+    },
     setWall: (opts) => {
       const cells: { x: number; y: number }[] = [];
       if (opts.at) {
@@ -831,6 +849,7 @@ function makeHost(state: GameState): Host {
         label: opts.label,
         color: opts.color,
         locked: opts.locked,
+        disabled: opts.disabled,
       });
       if (ent.type === "enemy") state.totalEnemies += 1;
       state.entities.push(ent);
@@ -891,19 +910,21 @@ function tryUse(state: GameState) {
   const aheadY = state.py + state.dirY * 0.9;
   const cx = Math.floor(aheadX);
   const cy = Math.floor(aheadY);
-  const mark = (state.level.marks ?? []).find((m) => m.x === cx && m.y === cy);
   let best: LiveEntity | null = null;
   let bestD = 1.6;
   for (const e of state.entities) {
     if (!e.alive) continue;
-    if (e.type !== "door" && e.type !== "pickup" && !e.id) continue;
+    if (e.type === "button" && e.disabled) continue;
+    if (e.type !== "door" && e.type !== "pickup" && e.type !== "button" && !e.id) {
+      continue;
+    }
     const d = Math.hypot(e.x - aheadX, e.y - aheadY);
     if (d < bestD) {
       bestD = d;
       best = e;
     }
   }
-  const who = best?.id || mark?.id || null;
+  const who = best?.id || null;
   if (best?.type === "door") {
     if (best.locked) {
       pushSay(state, "Locked");
@@ -912,29 +933,35 @@ function tryUse(state: GameState) {
       sfx.click?.();
     }
   }
-  if (who) runScript(state, "use", { target: str(who), x: num(cx), y: num(cy) });
+  if (who || best?.type === "button") {
+    runScript(state, "use", { target: str(who ?? ""), x: num(cx), y: num(cy) });
+  }
 }
 
 function updateUseHint(state: GameState) {
   const aheadX = state.px + state.dirX * 0.9;
   const aheadY = state.py + state.dirY * 0.9;
-  const cx = Math.floor(aheadX);
-  const cy = Math.floor(aheadY);
   const nearbyDoor = state.entities.find(
     (e) =>
       e.alive &&
       e.type === "door" &&
       Math.hypot(e.x - aheadX, e.y - aheadY) < 1.2,
   );
-  const mark = (state.level.marks ?? []).find((m) => m.x === cx && m.y === cy);
+  const nearbyBtn = state.entities.find(
+    (e) =>
+      e.alive &&
+      e.type === "button" &&
+      !e.disabled &&
+      Math.hypot(e.x - aheadX, e.y - aheadY) < 1.2,
+  );
   if (nearbyDoor) {
     state.useHint = nearbyDoor.locked
       ? "E  Locked"
       : nearbyDoor.open
         ? "E  Close"
         : "E  Open";
-  } else if (mark) {
-    state.useHint = mark.id ? `E  Use ${mark.id}` : "E  Use";
+  } else if (nearbyBtn) {
+    state.useHint = "E  Use";
   } else {
     state.useHint = "";
   }
@@ -1023,6 +1050,7 @@ function getSpriteImg(ent: LiveEntity, atlas: TextureAtlas) {
   if (ent.type === "door") return atlas.door;
   if (ent.type === "teleport") return atlas.teleport;
   if (ent.type === "pickup") return labeledPickup(ent.label, ent.color);
+  if (ent.type === "button") return atlas.button;
   return atlas.exit;
 }
 
@@ -1249,7 +1277,7 @@ export function renderGame(
   }[] = [];
   for (const e of state.entities) {
     if (!e.alive) continue;
-    if (e.type === "teleport") continue;
+    if (e.type === "button" || e.type === "teleport") continue;
     if (e.type === "door") {
       if (!e.open) continue;
       const bx = Math.floor(e.x);
@@ -1278,6 +1306,10 @@ export function renderGame(
     });
   }
   sprites.sort((a, b) => b.dist - a.dist);
+
+  const dirLen = Math.hypot(state.dirX, state.dirY) || 1;
+  const sprRightX = -state.dirY / dirLen;
+  const sprRightY = state.dirX / dirLen;
 
   for (const spr of sprites) {
     const spriteX = spr.x - state.px;
@@ -1309,6 +1341,18 @@ export function renderGame(
       if (transformY >= (state.zBuffer[stripe] ?? 0)) continue;
       const texX =
         (stripe - (-spriteW / 2 + spriteScreenX + shakeX)) / spriteW;
+      const wx = spr.x + sprRightX * (texX - 0.5);
+      const wy = spr.y + sprRightY * (texX - 0.5);
+      const cx = Math.floor(wx);
+      const cy = Math.floor(wy);
+      const floorC = floors?.[cy]?.[cx] ?? DEFAULT_FLOOR;
+      const ceilC = ceils?.[cy]?.[cx] ?? DEFAULT_CEIL;
+      const fr = (floorC >> 16) & 255;
+      const fg = (floorC >> 8) & 255;
+      const fb = floorC & 255;
+      const cr = (ceilC >> 16) & 255;
+      const cg = (ceilC >> 8) & 255;
+      const cb = ceilC & 255;
       for (
         let y = Math.max(0, drawStartY);
         y < Math.min(height, drawEndY);
@@ -1317,6 +1361,13 @@ export function renderGame(
         const texY = (y - drawStartY) / spriteH;
         let [r, g, b, a] = sampleSprite(img, texX, texY, shade);
         if (a < 16) continue;
+        const lr = cr + (fr - cr) * texY;
+        const lg = cg + (fg - cg) * texY;
+        const lb = cb + (fb - cb) * texY;
+        const mix = 0.28;
+        r = r * (1 - mix) + lr * mix;
+        g = g * (1 - mix) + lg * mix;
+        b = b * (1 - mix) + lb * mix;
         if (flash) {
           r = Math.min(255, r + 120);
           g = Math.min(255, g + 40);
@@ -1518,6 +1569,7 @@ export function renderMinimap(
 
   for (const e of state.entities) {
     if (!e.alive) continue;
+    if (e.type === "button") continue;
     if (e.type === "enemy") ctx.fillStyle = e.variant === "bruiser" ? "#a050d0" : "#e04040";
     else if (e.type === "ammo") ctx.fillStyle = "#d4a017";
     else if (e.type === "health") ctx.fillStyle = "#40c060";

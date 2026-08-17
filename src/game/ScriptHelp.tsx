@@ -728,6 +728,19 @@ function Commands() {
         </p>
       </Block>
       <Block>
+        <H>Buttons</H>
+        <p>
+          A button is a use point. The player cannot see it. You can put it
+          on a wall. Marks are only names. The player cannot use a mark.
+        </p>
+        <p>
+          <Code>enable</Code> and <Code>disable</Code> take the
+          button's id. A disabled button does not show a use prompt and
+          cannot be used. <Code>(disabled? "switch-1")</Code> is
+          true when that button is disabled.
+        </p>
+      </Block>
+      <Block>
         <H>set-wall</H>
         <p>
           <Code>set-wall</Code> changes cells. The call uses keys only.
@@ -817,8 +830,9 @@ function Commands() {
           <Code>type:</Code> is one of <Code>"enemy"</Code>,{" "}
           <Code>"ammo"</Code>, <Code>"health"</Code>,{" "}
           <Code>"exit"</Code>, <Code>"door"</Code>,{" "}
-          <Code>"teleport"</Code>, or{" "}
-          <Code>"pickup"</Code>.
+          <Code>"teleport"</Code>,{" "}
+          <Code>"pickup"</Code>, or{" "}
+          <Code>"button"</Code>.
         </p>
         <p>
           <Code>id:</Code> is a string. <Code>str</Code> makes an id. If
@@ -863,6 +877,14 @@ function Commands() {
           <Code>color:</Code> is a color string such as{" "}
           <Code>"#aa46c8"</Code>. If the key is missing, the pickup
           uses the default purple.
+        </p>
+      </Block>
+      <Block>
+        <H>button</H>
+        <p>
+          <Code>disabled:</Code> is <Code>true</Code> or{" "}
+          <Code>false</Code>. If the key is missing, the button is on. A
+          disabled button has no use prompt.
         </p>
       </Block>
       <Block>

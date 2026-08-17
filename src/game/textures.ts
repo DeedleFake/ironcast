@@ -18,6 +18,7 @@ export type TextureAtlas = {
   doorLocked: ImageData;
   teleport: ImageData;
   pickup: ImageData;
+  button: ImageData;
   weapon: ImageData;
 };
 
@@ -326,6 +327,38 @@ export function labeledPickup(label: string, color = 0xaa46c8): ImageData {
   return img;
 }
 
+function makeButton(): ImageData {
+  const img = new ImageData(TEX_SIZE, TEX_SIZE);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) d[i + 3] = 0;
+  for (let y = 18; y < 56; y++) {
+    for (let x = 20; x < 44; x++) {
+      const post = x >= 27 && x <= 36;
+      if (y > 38 && post) {
+        const edge = x === 27 || x === 36;
+        setPx(d, x, y, edge ? 48 : 72, edge ? 50 : 74, edge ? 56 : 80, 255);
+      }
+    }
+  }
+  for (let y = 16; y < 40; y++) {
+    for (let x = 16; x < 48; x++) {
+      const inset = x > 18 && x < 46 && y > 18 && y < 38;
+      const edge = !inset;
+      if (edge) {
+        setPx(d, x, y, 90, 88, 78, 255);
+      } else {
+        const glow = 1 - Math.abs(y - 28) / 12;
+        setPx(d, x, y, 220, 150 + glow * 50, 40, 255);
+      }
+    }
+  }
+  for (let x = 22; x < 42; x++) {
+    setPx(d, x, 26, 255, 230, 140, 255);
+    setPx(d, x, 27, 255, 210, 90, 255);
+  }
+  return img;
+}
+
 function makeDoorClosed(locked: boolean): ImageData {
   const img = new ImageData(TEX_SIZE, TEX_SIZE);
   const d = img.data;
@@ -495,6 +528,7 @@ export function getTextures(): TextureAtlas {
     doorLocked: makeDoorClosed(true),
     teleport: makePickup(80, 140, 220, "T"),
     pickup: makeCrystal(170, 70, 200),
+    button: makeButton(),
     weapon: makeWeapon(),
   };
   return cached;
