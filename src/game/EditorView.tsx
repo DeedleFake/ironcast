@@ -1684,7 +1684,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                       <span
                         className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-fg"
                         style={{
-                          transform: `rotate(${(-level.spawn.angle * 180) / Math.PI}deg)`,
+                          transform: `rotate(${(level.spawn.angle * 180) / Math.PI}deg)`,
                         }}
                         title="Spawn"
                       >

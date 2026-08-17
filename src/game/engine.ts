@@ -66,7 +66,6 @@ export interface GameState {
   totalEnemies: number;
   entities: LiveEntity[];
   mode: GameMode;
-  message: string;
   shake: number;
   muzzle: number;
   hitmarker: number;
@@ -91,6 +90,33 @@ export interface GameState {
   useHint: string;
   started: boolean;
   teleportCd: number;
+  messages: SayLine[];
+  saySeq: number;
+}
+
+export type SayLine = { id: number; text: string; t: number };
+
+const SAY_LIFE = 3.4;
+const SAY_MAX = 6;
+
+export function pushSay(state: GameState, text: string) {
+  const msg = text.trim();
+  if (!msg) return;
+  state.saySeq += 1;
+  state.messages.push({ id: state.saySeq, text: msg, t: SAY_LIFE });
+  if (state.messages.length > SAY_MAX) {
+    state.messages.splice(0, state.messages.length - SAY_MAX);
+  }
+}
+
+function tickSays(state: GameState, dt: number) {
+  if (!state.messages.length) return;
+  const next: SayLine[] = [];
+  for (const m of state.messages) {
+    const t = m.t - dt;
+    if (t > 0) next.push({ ...m, t });
+  }
+  state.messages = next;
 }
 
 const MOVE_SPEED = 3.2;
@@ -147,7 +173,6 @@ export function createGameState(level: GameLevel): GameState {
     totalEnemies,
     entities,
     mode: "playing",
-    message: "",
     shake: 0,
     muzzle: 0,
     hitmarker: 0,
@@ -172,6 +197,8 @@ export function createGameState(level: GameLevel): GameState {
     useHint: "",
     started: false,
     teleportCd: 0,
+    messages: [],
+    saySeq: 0,
   };
   setAngle(state, L.spawn.angle);
   return state;
@@ -320,9 +347,6 @@ function fireWeapon(state: GameState) {
         x: num(best.x),
         y: num(best.y),
       });
-      if (state.kills >= state.totalEnemies && state.totalEnemies > 0) {
-        state.message = "They're down — find the exit";
-      }
     }
     return;
   }
@@ -424,7 +448,7 @@ function updateEnemies(state: GameState, dt: number) {
       if (state.health <= 0) {
         state.health = 0;
         state.mode = "dead";
-        state.message = "YOU DIED";
+        pushSay(state, "YOU DIED");
       }
     }
   }
@@ -537,11 +561,11 @@ function updatePickups(state: GameState) {
       if (state.kills >= state.totalEnemies) {
         e.alive = false;
         state.mode = "won";
-        state.message = "SECTOR CLEARED";
+        pushSay(state, "SECTOR CLEARED");
         state.score += 500;
         sfx.win();
       } else {
-        state.message = `Still ${state.totalEnemies - state.kills} left`;
+        pushSay(state, `Still ${state.totalEnemies - state.kills} left`);
       }
     }
   }
@@ -551,6 +575,7 @@ export function updateGame(state: GameState, dt: number) {
   // Frozen until they're actually in control (paused / dead / won / click-to-fight)
   if (state.mode !== "playing" || !state.pointerLocked) return;
   const d = Math.min(dt, 0.1);
+  tickSays(state, d);
 
   // Look — this map basis uses angle 0 = +X with plane = (-dirY, dirX).
   // Increasing angle turns the view RIGHT, so mouse right (+lookDX) must
@@ -630,16 +655,16 @@ export function updateGame(state: GameState, dt: number) {
 
   if (!state.started) {
     state.started = true;
+    if (state.scriptError) pushSay(state, state.scriptError);
     if (state.script) {
       try {
         evalForms(state.script.boot, state.scriptEnv, makeHost(state));
       } catch (err) {
         state.scriptError = err instanceof Error ? err.message : "Script error";
-        state.message = state.scriptError;
+        pushSay(state, state.scriptError);
       }
       runScript(state, "start", {});
     }
-    if (state.scriptError) state.message = state.scriptError;
   }
 }
 
@@ -653,7 +678,7 @@ function runScript(
     fireHandlers(state.script, state.scriptEnv, makeHost(state), event, named);
   } catch (err) {
     state.scriptError = err instanceof Error ? err.message : "Script error";
-    state.message = state.scriptError;
+    pushSay(state, state.scriptError);
   }
 }
 
@@ -666,7 +691,7 @@ function makeHost(state: GameState): Host {
   };
   return {
     say: (msg) => {
-      state.message = msg;
+      pushSay(state, msg);
     },
     give: (what, n) => {
       if (what === "ammo") {
@@ -822,12 +847,12 @@ function makeHost(state: GameState): Host {
     },
     win: () => {
       state.mode = "won";
-      state.message = "SECTOR CLEARED";
+      pushSay(state, "SECTOR CLEARED");
       sfx.win();
     },
     lose: () => {
       state.mode = "dead";
-      state.message = "YOU DIED";
+      pushSay(state, "YOU DIED");
     },
     after: (sec, fn) => {
       state.timers.push({ t: Math.max(0, sec), fn });
@@ -855,7 +880,7 @@ function tryUse(state: GameState) {
   const who = best?.name || mark?.name || null;
   if (best?.type === "door") {
     if (best.locked) {
-      state.message = "Locked";
+      pushSay(state, "Locked");
     } else {
       best.open = !best.open;
       sfx.click?.();

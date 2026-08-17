@@ -209,9 +209,9 @@ export function parseLevel(input: string | unknown): ParseResult {
   return { ok: true, level };
 }
 
-export function serializeLevel(level: GameLevel, pretty = true): string {
+export function serializeLevel(level: GameLevel, pretty = false): string {
   const payload = cloneLevel(level);
-  return JSON.stringify(payload, null, pretty ? 2 : 0);
+  return pretty ? JSON.stringify(payload, null, 2) : JSON.stringify(payload);
 }
 
 /** Trigger browser download of a level file. */

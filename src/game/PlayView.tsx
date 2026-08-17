@@ -8,6 +8,7 @@ import {
   unlockAudio,
   updateGame,
   type GameState,
+  type SayLine,
 } from "./engine";
 import {
   Crosshair,
@@ -103,7 +104,7 @@ export function PlayView({
     kills: 0,
     total: 0,
     mode: "playing" as GameState["mode"],
-    message: "",
+    messages: [] as SayLine[],
     needClick: true,
     useHint: "",
   });
@@ -136,7 +137,7 @@ export function PlayView({
       kills: s.kills,
       total: s.totalEnemies,
       mode: s.mode,
-      message: "",
+      messages: [],
       needClick: true,
       useHint: "",
     });
@@ -276,13 +277,19 @@ export function PlayView({
       }
 
       setHud((prev) => {
+        const says = s.messages
+          .map((m) => `${m.id}:${m.text}:${(m.t * 8) | 0}`)
+          .join("|");
+        const prevSays = prev.messages
+          .map((m) => `${m.id}:${m.text}:${(m.t * 8) | 0}`)
+          .join("|");
         if (
           prev.health === s.health &&
           prev.ammo === s.ammo &&
           prev.score === s.score &&
           prev.kills === s.kills &&
           prev.mode === s.mode &&
-          prev.message === s.message &&
+          prevSays === says &&
           prev.useHint === s.useHint &&
           prev.needClick === (!s.pointerLocked && s.mode === "playing")
         ) {
@@ -295,7 +302,7 @@ export function PlayView({
           kills: s.kills,
           total: s.totalEnemies,
           mode: s.mode,
-          message: s.message,
+          messages: s.messages.map((m) => ({ ...m })),
           needClick: !s.pointerLocked && s.mode === "playing",
           useHint: s.useHint,
         };
@@ -599,9 +606,17 @@ export function PlayView({
           />
         )}
 
-        {hud.message && hud.mode === "playing" && (
-          <div className="pointer-events-none absolute top-1/3 left-1/2 z-10 -translate-x-1/2 rounded bg-black/70 px-4 py-2 font-display text-sm tracking-wide text-accent uppercase">
-            {hud.message}
+        {hud.messages.length > 0 && hud.mode === "playing" && (
+          <div className="pointer-events-none absolute top-[22%] left-1/2 z-10 flex w-[min(22rem,90%)] -translate-x-1/2 flex-col items-center gap-1">
+            {hud.messages.map((m) => (
+              <div
+                key={m.id}
+                className="rounded bg-black/70 px-4 py-1.5 font-display text-sm tracking-wide text-accent uppercase"
+                style={{ opacity: Math.min(1, m.t / 0.4) }}
+              >
+                {m.text}
+              </div>
+            ))}
           </div>
         )}
         {hud.useHint && hud.mode === "playing" && !hud.needClick && (
