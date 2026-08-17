@@ -1,6 +1,6 @@
 /** Procedural wall + sprite textures for the raycaster. */
 
-import { defaultWallColor } from "./types";
+import { defaultWallColor, type PickupShape } from "./types";
 
 const TEX_SIZE = 64;
 
@@ -246,28 +246,78 @@ function makePickup(r: number, g: number, b: number, glyph: string): ImageData {
 }
 
 function makeCrystal(r: number, g: number, b: number): ImageData {
+  return makePickupBody("diamond", r, g, b);
+}
+
+function shadeFill(
+  d: Uint8ClampedArray,
+  inside: (x: number, y: number) => boolean,
+  r: number,
+  g: number,
+  b: number,
+) {
+  for (let y = 0; y < TEX_SIZE; y++) {
+    for (let x = 0; x < TEX_SIZE; x++) {
+      if (!inside(x, y)) continue;
+      const edge =
+        !inside(x - 1, y) ||
+        !inside(x + 1, y) ||
+        !inside(x, y - 1) ||
+        !inside(x, y + 1);
+      const hi = x < 32 ? 1.15 : 0.78;
+      setPx(
+        d,
+        x,
+        y,
+        edge ? r * 0.45 : r * hi,
+        edge ? g * 0.45 : g * hi,
+        edge ? b * 0.45 : b * hi,
+        255,
+      );
+    }
+  }
+}
+
+function makePickupBody(shape: PickupShape, r: number, g: number, b: number): ImageData {
   const img = new ImageData(TEX_SIZE, TEX_SIZE);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) d[i + 3] = 0;
-  for (let y = 10; y < 54; y++) {
-    for (let x = 10; x < 54; x++) {
-      const dx = Math.abs(x - 32);
-      const dy = Math.abs(y - 32);
-      if (dx / 14 + dy / 20 < 1) {
-        const edge = dx / 14 + dy / 20 > 0.82;
-        const hi = x < 32 ? 1.15 : 0.75;
-        setPx(
-          d,
-          x,
-          y,
-          edge ? r * 0.45 : r * hi,
-          edge ? g * 0.45 : g * hi,
-          edge ? b * 0.45 : b * hi,
-          255,
-        );
+  const cx = 31.5;
+  const cy = 31.5;
+  const inside = (x: number, y: number) => {
+    const dx = x - cx;
+    const dy = y - cy;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+    switch (shape) {
+      case "diamond":
+        return ax / 14 + ay / 20 < 1;
+      case "square":
+        return ax < 16 && ay < 16;
+      case "circle":
+        return dx * dx + dy * dy < 18 * 18;
+      case "triangle": {
+        const t = (y - 12) / 36;
+        if (t < 0 || t > 1) return false;
+        return ax < 2 + t * 18;
+      }
+      case "cross":
+        return (ax < 5 && ay < 20) || (ay < 5 && ax < 20);
+      case "star": {
+        const ang = Math.atan2(dy, dx);
+        const rad = Math.hypot(dx, dy);
+        const spike = 0.32 + 0.68 * Math.pow(Math.abs(Math.cos(ang * 2)), 1.15);
+        return rad < 22 * spike;
+      }
+      case "explosion": {
+        const ang = Math.atan2(dy, dx);
+        const rad = Math.hypot(dx, dy);
+        const spike = 0.38 + 0.62 * Math.pow(Math.abs(Math.cos(ang * 4)), 0.55);
+        return rad < 21 * spike;
       }
     }
-  }
+  };
+  shadeFill(d, inside, r, g, b);
   return img;
 }
 
@@ -305,16 +355,20 @@ function stampGlyph(
 
 const pickupCache = new Map<string, ImageData>();
 
-export function labeledPickup(label: string, color = 0xaa46c8): ImageData {
+export function labeledPickup(
+  label: string,
+  color = 0xaa46c8,
+  shape: PickupShape = "diamond",
+): ImageData {
   const text = label.trim().slice(0, 3);
   const packed = color & 0xffffff;
-  const key = `${text}:${packed.toString(16)}`;
+  const key = `${shape}:${text}:${packed.toString(16)}`;
   const hit = pickupCache.get(key);
   if (hit) return hit;
   const r = (packed >> 16) & 255;
   const g = (packed >> 8) & 255;
   const b = packed & 255;
-  const img = makeCrystal(r, g, b);
+  const img = makePickupBody(shape, r, g, b);
   if (text) {
     const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
     const light = luma > 0.55;

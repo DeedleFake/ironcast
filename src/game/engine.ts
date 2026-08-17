@@ -3,8 +3,22 @@
  * Canvas 2D column rendering with textured walls and billboard sprites.
  */
 
-import type { EnemyVariant, GameLevel, LevelEntity } from "./types";
-import { cloneLevel, colorGrid, DEFAULT_CEIL, DEFAULT_FLOOR, DEFAULT_PICKUP, defaultWallColor, hexFromColor, seedWallColors, texFromWallName, uid, wallNameFromTex } from "./types";
+import type { EnemyVariant, GameLevel, LevelEntity, PickupShape } from "./types";
+import {
+  cloneLevel,
+  colorGrid,
+  DEFAULT_CEIL,
+  DEFAULT_FLOOR,
+  DEFAULT_PICKUP,
+  DEFAULT_PICKUP_SHAPE,
+  defaultWallColor,
+  hexFromColor,
+  parsePickupShape,
+  seedWallColors,
+  texFromWallName,
+  uid,
+  wallNameFromTex,
+} from "./types";
 import {
   getTextures,
   labeledPickup,
@@ -45,6 +59,7 @@ export interface LiveEntity {
   dest: string;
   label: string;
   color: number;
+  shape: PickupShape;
   variant: EnemyVariant;
   locked: boolean;
   open: boolean;
@@ -222,6 +237,7 @@ function liveFromLevel(e: LevelEntity): LiveEntity {
     dest: e.dest || "",
     label: (e.label || "").trim().slice(0, 3),
     color: e.color ?? DEFAULT_PICKUP,
+    shape: parsePickupShape(e.shape ?? "") ?? DEFAULT_PICKUP_SHAPE,
     variant,
     locked: !!e.locked,
     open: e.type === "door" ? false : true,
@@ -809,8 +825,8 @@ function makeHost(state: GameState): Host {
       if (patch.dest !== undefined) e.dest = patch.dest;
       if (patch.label !== undefined) e.label = patch.label.slice(0, 3);
       if (patch.color !== undefined) e.color = patch.color;
-      if (patch.variant !== undefined) {
-        e.variant = patch.variant === "bruiser" ? "bruiser" : "grunt";
+      if (patch.shape !== undefined) {
+        e.shape = parsePickupShape(patch.shape) ?? DEFAULT_PICKUP_SHAPE;
       }
       return true;
     },
@@ -830,6 +846,8 @@ function makeHost(state: GameState): Host {
           return e.label ? str(e.label) : nil();
         case "color":
           return str(hexFromColor(e.color));
+        case "shape":
+          return str(e.shape);
         case "variant":
           return str(e.variant);
         case "type":
@@ -944,6 +962,7 @@ function makeHost(state: GameState): Host {
           dest: opts.dest,
           label: opts.label,
           color: opts.color,
+          shape: parsePickupShape(opts.shape ?? "") ?? undefined,
           locked: opts.locked,
           disabled: opts.disabled,
         });
@@ -1184,7 +1203,7 @@ function getSpriteImg(ent: LiveEntity, atlas: TextureAtlas) {
   if (ent.type === "health") return atlas.health;
   if (ent.type === "door") return atlas.door;
   if (ent.type === "teleport") return atlas.teleport;
-  if (ent.type === "pickup") return labeledPickup(ent.label, ent.color);
+  if (ent.type === "pickup") return labeledPickup(ent.label, ent.color, ent.shape);
   if (ent.type === "button") return atlas.button;
   return atlas.exit;
 }

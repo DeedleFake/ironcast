@@ -5,12 +5,15 @@ import type {
   EntityType,
   GameLevel,
   LevelEntity,
+  PickupShape,
 } from "./types";
 import {
   DEFAULT_CEIL,
   DEFAULT_FLOOR,
   DEFAULT_PICKUP,
+  DEFAULT_PICKUP_SHAPE,
   defaultWallColor,
+  PICKUP_SHAPES,
   WALL_NAMES,
   WALL_TEXTURE_COUNT,
   cloneLevel,
@@ -57,7 +60,6 @@ import {
   Redo2,
   Zap,
   DoorOpen,
-  BookOpen,
   ChevronDown,
   ChevronUp,
   Spline,
@@ -244,6 +246,7 @@ type SelOpt =
   | "turn"
   | "label"
   | "color"
+  | "shape"
   | "wallColor"
   | "disabled";
 
@@ -259,7 +262,7 @@ function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
     if (!e) return new Set();
     if (e.type === "enemy") return new Set<SelOpt>(["variant", "name"]);
     if (e.type === "teleport") return new Set<SelOpt>(["name", "dest"]);
-    if (e.type === "pickup") return new Set<SelOpt>(["name", "label", "color"]);
+    if (e.type === "pickup") return new Set<SelOpt>(["name", "label", "color", "shape"]);
     if (e.type === "button") return new Set<SelOpt>(["name", "disabled"]);
     return new Set<SelOpt>(["name"]);
   }
@@ -327,6 +330,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [thingDest, setThingDest] = useState("");
   const [thingLabel, setThingLabel] = useState("");
   const [thingColor, setThingColor] = useState(DEFAULT_PICKUP);
+  const [thingShape, setThingShape] = useState<PickupShape>(DEFAULT_PICKUP_SHAPE);
   const [variant, setVariant] = useState<EnemyVariant>("grunt");
   const [thingDisabled, setThingDisabled] = useState(false);
   const [emptyFloor, setEmptyFloor] = useState(DEFAULT_FLOOR);
@@ -359,6 +363,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   labelRef.current = thingLabel;
   const colorRef = useRef(thingColor);
   colorRef.current = thingColor;
+  const shapeRef = useRef(thingShape);
+  shapeRef.current = thingShape;
   const variantRef = useRef(variant);
   variantRef.current = variant;
   const disabledRef = useRef(thingDisabled);
@@ -619,6 +625,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         dest: destRef.current,
         label: labelRef.current,
         color: colorRef.current,
+        shape: shapeRef.current,
         variant: variantRef.current,
         disabled: disabledRef.current,
         floor: floorRef.current,
@@ -640,6 +647,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         dest: destRef.current,
         label: labelRef.current,
         color: colorRef.current,
+        shape: shapeRef.current,
         variant: variantRef.current,
         disabled: disabledRef.current,
         floor: floorRef.current,
@@ -669,6 +677,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       setThingDest(ent.dest || "");
       setThingLabel(ent.label || "");
       setThingColor(ent.color ?? DEFAULT_PICKUP);
+      setThingShape(ent.shape ?? DEFAULT_PICKUP_SHAPE);
       setVariant(ent.variant === "bruiser" ? "bruiser" : "grunt");
       setThingDisabled(!!ent.disabled);
       setStatus(`Picked ${ent.id || ent.type}`);
@@ -945,14 +954,6 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
           </button>
           <button
             type="button"
-            onClick={() => setHelpOpen(true)}
-            className="flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-fg"
-            title="Script tutorial"
-          >
-            <BookOpen className="size-3.5" />
-          </button>
-          <button
-            type="button"
             onClick={saveLocal}
             className="flex items-center gap-1 rounded-md border border-border px-2 py-1.5 text-xs text-fg hover:bg-surface-2"
           >
@@ -1197,6 +1198,24 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
+                ) : null}
+                {can.has("shape") ? (
+                  <ShapePick
+                    value={
+                      selEnts.find((e) => e.type === "pickup")?.shape ??
+                      DEFAULT_PICKUP_SHAPE
+                    }
+                    onChange={(shape) => {
+                      const ids = new Set(
+                        selEnts.filter((x) => x.type === "pickup").map((x) => x.key),
+                      );
+                      editSel((L) => {
+                        for (const ent of L.entities) {
+                          if (ids.has(ent.key)) ent.shape = shape;
+                        }
+                      });
+                    }}
+                  />
                 ) : null}
                 {can.has("color") ? (
                   <ColorPick
@@ -1515,6 +1534,10 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                         className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                       />
                     </label>
+                    <ShapePick
+                      value={thingShape}
+                      onChange={setThingShape}
+                    />
                     <ColorPick
                       label="Color"
                       value={thingColor}
@@ -1757,6 +1780,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 dest: destRef.current,
                 label: labelRef.current,
                 color: colorRef.current,
+                shape: shapeRef.current,
                 variant: variantRef.current,
                 disabled: disabledRef.current,
                 floor: floorRef.current,
@@ -1832,7 +1856,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           {ent.type === "exit" && "⎋"}
                           {ent.type === "door" && "▯"}
                           {ent.type === "teleport" && "◎"}
-                          {ent.type === "pickup" && (ent.label || "◆")}
+                          {ent.type === "pickup" &&
+                            (ent.label || SHAPE_GLYPH[ent.shape ?? "diamond"])}
                           {ent.type === "button" && "●"}
                         </span>
                         {ent.id ? (
@@ -2056,6 +2081,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               <ScriptEditor
                 value={level.script ?? ""}
                 onChange={(src) => setLevel((l) => ({ ...l, script: src }))}
+                onHelp={() => setHelpOpen(true)}
                 error={
                   (level.script ?? "").trim()
                     ? (() => {
@@ -2206,6 +2232,26 @@ function SizeField({
   );
 }
 
+const SHAPE_GLYPH: Record<PickupShape, string> = {
+  diamond: "◆",
+  square: "■",
+  star: "✦",
+  explosion: "✴",
+  circle: "●",
+  triangle: "▲",
+  cross: "＋",
+};
+
+const SHAPE_LABEL: Record<PickupShape, string> = {
+  diamond: "Diamond",
+  square: "Square",
+  star: "Star",
+  explosion: "Explosion",
+  circle: "Circle",
+  triangle: "Triangle",
+  cross: "Cross",
+};
+
 function ColorPick({
   label,
   value,
@@ -2231,6 +2277,34 @@ function ColorPick({
         </span>
       </span>
     </label>
+  );
+}
+
+function ShapePick({
+  value,
+  onChange,
+}: {
+  value: PickupShape;
+  onChange: (s: PickupShape) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-1">
+      {PICKUP_SHAPES.map((s) => (
+        <button
+          key={s}
+          type="button"
+          onClick={() => onChange(s)}
+          className={`rounded-md border px-2 py-1 text-left text-[11px] ${
+            value === s
+              ? "border-primary bg-primary/15 text-fg"
+              : "border-border text-muted"
+          }`}
+        >
+          <span className="mr-1 text-fg">{SHAPE_GLYPH[s]}</span>
+          {SHAPE_LABEL[s]}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -2273,6 +2347,7 @@ function applyBrushTo(
     dest: string;
     label: string;
     color: number;
+    shape: PickupShape;
     variant: EnemyVariant;
     disabled: boolean;
     floor: number;
@@ -2283,6 +2358,7 @@ function applyBrushTo(
     dest: "",
     label: "",
     color: DEFAULT_PICKUP,
+    shape: DEFAULT_PICKUP_SHAPE,
     variant: "grunt",
     disabled: false,
     floor: DEFAULT_FLOOR,
@@ -2357,6 +2433,7 @@ function applyBrushTo(
           ? extra.label.trim().slice(0, 3) || undefined
           : undefined,
       color: brush.thing === "pickup" ? extra.color : undefined,
+      shape: brush.thing === "pickup" ? extra.shape : undefined,
       variant: brush.thing === "enemy" ? extra.variant : undefined,
       locked: brush.thing === "door" ? false : undefined,
     }),
@@ -2682,6 +2759,7 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
       e.dest ?? "",
       e.label ?? "",
       e.color ?? "",
+      e.shape ?? "",
       e.variant ?? "",
       e.locked ? 1 : 0,
       e.disabled ? 1 : 0,

@@ -22,6 +22,7 @@ import {
   ensureKeys,
   levelIssues,
   parseHexColor,
+  parsePickupShape,
   readPublicId,
   seedWallColors,
   withKey,
@@ -256,6 +257,7 @@ function coerceEntity(e: unknown): LevelEntity | null {
     dest: typeof o.dest === "string" ? o.dest : undefined,
     label: typeof o.label === "string" ? o.label : undefined,
     color: isNum(o.color) ? o.color : undefined,
+    shape: typeof o.shape === "string" ? parsePickupShape(o.shape) ?? undefined : undefined,
     variant: o.variant === "bruiser" ? "bruiser" : o.variant === "grunt" ? "grunt" : undefined,
     locked: typeof o.locked === "boolean" ? o.locked : undefined,
     disabled: o.disabled === true ? true : undefined,
@@ -400,6 +402,7 @@ export function toSavedLevel(level: GameLevel): Record<string, unknown> {
     if (e.dest) out.dest = e.dest;
     if (e.label && e.label !== "?") out.label = e.label;
     if (e.color !== undefined && e.color !== DEFAULT_PICKUP) out.color = e.color;
+    if (e.shape && e.shape !== "diamond") out.shape = e.shape;
     if (e.variant === "bruiser") out.variant = "bruiser";
     if (e.locked) out.locked = true;
     if (e.disabled) out.disabled = true;

@@ -723,7 +723,8 @@ function Commands() {
           The fields you can change are <Code>locked:</Code>,{" "}
           <Code>open:</Code>, <Code>disabled:</Code>,{" "}
           <Code>dest:</Code>, <Code>label:</Code>,{" "}
-          <Code>color:</Code>, and <Code>variant:</Code>.
+          <Code>color:</Code>, <Code>shape:</Code>, and{" "}
+          <Code>variant:</Code>.
         </p>
         <p>
           <Code>locked</Code> and <Code>open</Code> belong to doors.{" "}
@@ -933,6 +934,14 @@ function Commands() {
           <Code>color:</Code> is a color string such as{" "}
           <Code>"#aa46c8"</Code>. If the key is missing, the pickup
           uses the default purple.
+        </p>
+        <p>
+          <Code>shape:</Code> is the silhouette. The names are{" "}
+          <Code>"diamond"</Code>, <Code>"square"</Code>,{" "}
+          <Code>"star"</Code>, <Code>"explosion"</Code>,{" "}
+          <Code>"circle"</Code>, <Code>"triangle"</Code>, and{" "}
+          <Code>"cross"</Code>. If the key is missing, the pickup is a
+          diamond.
         </p>
       </Block>
       <Block>

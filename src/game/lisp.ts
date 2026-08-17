@@ -1,6 +1,6 @@
 /** Tiny event Lisp: parse, format, highlight, evaluate. */
 
-import { texFromWallName } from "./types";
+import { parsePickupShape, texFromWallName } from "./types";
 
 export type LispVal = (
   | { k: "num"; v: number }
@@ -673,6 +673,7 @@ export type AttrPatch = {
   dest?: string;
   label?: string;
   color?: number;
+  shape?: string;
   variant?: string;
 };
 
@@ -713,6 +714,7 @@ export type Host = {
     locked?: boolean;
     disabled?: boolean;
     fill?: boolean;
+    shape?: string;
   }) => string | string[] | null;
   remove: (name: string) => boolean;
   teleport: (who: string, dest: LispVal, y?: LispVal) => boolean;
@@ -1324,6 +1326,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         "label",
         "color",
         "variant",
+        "shape",
       ];
       for (const key of call.keys.keys()) {
         if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
@@ -1344,6 +1347,12 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       if (color) patch.color = asColor(color, "color");
       const variant = call.keys.get("variant");
       if (variant) patch.variant = asName(variant);
+      const shape = call.keys.get("shape");
+      if (shape) {
+        const parsed = parsePickupShape(asName(shape));
+        if (!parsed) throw new LispError(`unknown shape: ${asName(shape)}`);
+        patch.shape = parsed;
+      }
       if (
         patch.locked === undefined &&
         patch.open === undefined &&
@@ -1351,7 +1360,8 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         !dest &&
         !label &&
         !color &&
-        !variant
+        !variant &&
+        !shape
       ) {
         throw new LispError("set-attr needs an attribute");
       }
@@ -1374,6 +1384,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         "variant",
         "type",
         "id",
+        "shape",
       ];
       if (!ok.includes(attr)) throw new LispError(`unknown attr ${attr}`);
       return h.getAttr(asName(args[0]!), attr) ?? nil();
@@ -1448,6 +1459,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         "locked",
         "disabled",
         "fill",
+        "shape",
       ];
       for (const key of call.keys.keys()) {
         if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
@@ -1465,20 +1477,24 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       const color = call.keys.get("color");
       const locked = call.keys.get("locked");
       const disabled = call.keys.get("disabled");
+      const shape = call.keys.get("shape");
       if (variant && kind !== "enemy") {
         throw new LispError("variant: is only for enemy");
       }
       if (dest && kind !== "teleport") {
         throw new LispError("dest: is only for teleport");
       }
-      if ((label || color) && kind !== "pickup") {
-        throw new LispError("label: and color: are only for pickup");
+      if ((label || color || shape) && kind !== "pickup") {
+        throw new LispError("label:, color:, and shape: are only for pickup");
       }
       if (locked && kind !== "door") {
         throw new LispError("locked: is only for door");
       }
       if (disabled && kind !== "button") {
         throw new LispError("disabled: is only for button");
+      }
+      if (shape && parsePickupShape(asName(shape)) === null) {
+        throw new LispError(`unknown shape: ${asName(shape)}`);
       }
       const publicId = call.keys.get("id");
       const fill = call.keys.has("fill") && truthy(call.keys.get("fill")!);
@@ -1496,6 +1512,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         locked: locked ? truthy(locked) : undefined,
         disabled: disabled ? truthy(disabled) : undefined,
         fill,
+        shape: shape ? asName(shape) : undefined,
       });
       if (made === null) throw new LispError("spawn at: not found");
       if (Array.isArray(made)) return list(made.map(str));

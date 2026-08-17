@@ -27,6 +27,38 @@ export type EntityType =
 
 export type EnemyVariant = "grunt" | "bruiser";
 
+export const PICKUP_SHAPES = [
+  "diamond",
+  "square",
+  "star",
+  "explosion",
+  "circle",
+  "triangle",
+  "cross",
+] as const;
+export type PickupShape = (typeof PICKUP_SHAPES)[number];
+export const DEFAULT_PICKUP_SHAPE: PickupShape = "diamond";
+
+const SHAPE_ALIASES: Record<string, PickupShape> = {
+  diamond: "diamond",
+  crystal: "diamond",
+  square: "square",
+  box: "square",
+  star: "star",
+  explosion: "explosion",
+  burst: "explosion",
+  explode: "explosion",
+  circle: "circle",
+  orb: "circle",
+  triangle: "triangle",
+  cross: "cross",
+  plus: "cross",
+};
+
+export function parsePickupShape(name: string): PickupShape | null {
+  return SHAPE_ALIASES[name.trim().toLowerCase()] ?? null;
+}
+
 export interface LevelEntity {
   /** Runtime only. Never saved. */
   key: string;
@@ -42,6 +74,8 @@ export interface LevelEntity {
   label?: string;
   /** Pickup body color, 0xRRGGBB */
   color?: number;
+  /** Pickup silhouette. Default diamond. */
+  shape?: PickupShape;
   variant?: EnemyVariant;
   locked?: boolean;
   /** Button is hidden and cannot be used. */

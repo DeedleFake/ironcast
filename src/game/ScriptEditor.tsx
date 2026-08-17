@@ -38,10 +38,12 @@ function highlightHtml(src: string): string {
 export function ScriptEditor({
   value,
   onChange,
+  onHelp,
   error,
 }: {
   value: string;
   onChange: (src: string) => void;
+  onHelp?: () => void;
   error?: string;
 }) {
   const preRef = useRef<HTMLPreElement>(null);
@@ -76,13 +78,24 @@ export function ScriptEditor({
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] tracking-widest text-dim uppercase">Script</p>
-        <button
-          type="button"
-          onClick={format}
-          className="rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:bg-surface-2 hover:text-fg"
-        >
-          Format
-        </button>
+        <div className="flex items-center gap-1">
+          {onHelp ? (
+            <button
+              type="button"
+              onClick={onHelp}
+              className="rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:bg-surface-2 hover:text-fg"
+            >
+              Tutorial
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={format}
+            className="rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:bg-surface-2 hover:text-fg"
+          >
+            Format
+          </button>
+        </div>
       </div>
       <div className="relative min-h-[10rem] flex-1 overflow-hidden rounded-md border border-border bg-[#0e0e12]">
         <pre

@@ -451,30 +451,46 @@ export function createDepthsLevel(): GameLevel {
     ],
     entities: [
       { type: "door", x: 3, y: 4 },
-      { type: "exit", x: 17, y: 19, id: "exit-1" },
+      { type: "exit", x: 17, y: 19, id: "exit" },
       { type: "button", x: 9, y: 19, id: "activate-server" },
     ],
     zones: [
-      { x: 0, y: 13, w: 7, h: 1, id: "zone-2" },
-      { x: 1, y: 17, w: 5, h: 5, id: "zone-1" },
-      { x: 7, y: 16, w: 1, h: 7, id: "zone-3" },
+      { x: 0, y: 13, w: 7, h: 1, id: "tripwire" },
+      { x: 1, y: 17, w: 5, h: 5, id: "lair" },
+      { x: 7, y: 16, w: 1, h: 7, id: "seal" },
       { x: 2, y: 20, w: 3, h: 1, id: "guard-spawn-3" },
       { x: 2, y: 19, w: 3, h: 1, id: "guard-spawn-2" },
       { x: 2, y: 17, w: 3, h: 1, id: "guard-spawn-1" },
       { x: 2, y: 21, w: 3, h: 1, id: "guard-spawn" },
     ],
     marks: [{ x: 9, y: 19, id: "server" }],
-    script: prettyScript(`(def teleport-guard (0))
+    script: prettyScript(`(def explode (target:)
+  (set-wall at: target
+            type: "empty"
+            ceiling: "#ff0000"
+            floor: "#ff0000")
+  (let ((ceiling (get-wall 0 0 "ceiling"))
+        (floor (get-wall 0 0 "floor"))
+        (explosion (spawn at: target
+                          fill: true
+                          type: "pickup"
+                          color: "#ff7800"
+                          shape: "explosion")))
+    (after 0.2
+      (set-wall at: target ceiling: ceiling floor: floor)
+      (remove explosion))))
+
+(def teleport-guard (0))
 (def teleport-guard (n)
   (after 0.5
     (teleport "guard" (str "guard-spawn-" n))
     (teleport-guard (- n 1))))
 
-(on enter (zone: "zone-2")
+(on enter (zone: "tripwire")
   (if not (get "spawned")
     (set "spawned" true)
     (say "You've activated my trap card!")
-    (set-wall at: "zone-1"
+    (set-wall at: "lair"
               type: "empty"
               ceiling: "#3584e4"
               floor: "#63452c")
@@ -489,13 +505,13 @@ export function createDepthsLevel(): GameLevel {
   (after 3
     (say "SYSTEM: Emergency override activated."))
   (after 6
-    (set-wall at: "zone-3" type: "empty")))
+    (explode target: "seal")))
 
 (on use (target: "activate-server")
   (set-attr id: "activate-server" disabled: true)
   (set-wall at: "server" color: "#ff0000")
   (after 2
-    (set-wall at: "server" type: "empty")))
+    (explode target: "server")))
 `),
   });
   if (!result.ok) throw new Error(result.error);
