@@ -8,6 +8,7 @@ export const MAP_MAX = 64;
 export const DEFAULT_FLOOR = 0x2a2420;
 export const DEFAULT_CEIL = 0x12141a;
 export const DEFAULT_PICKUP = 0xaa46c8;
+export const DEFAULT_FOG = "#0a0a0c";
 
 /** Wall cell: 0 = empty floor, 1+ = wall texture index */
 export type WallGrid = number[][];
@@ -26,14 +27,15 @@ export type EntityType =
 export type EnemyVariant = "grunt" | "bruiser";
 
 export interface LevelEntity {
-  id: string;
+  /** Runtime only. Never saved. */
+  key: string;
+  /** Explicit script id. Omitted when unnamed. */
+  id?: string;
   type: EntityType;
   /** Cell-space coordinates (center of cell = integer + 0.5) */
   x: number;
   y: number;
-  /** Script-facing name, e.g. door-armory */
-  name?: string;
-  /** Teleport destination name */
+  /** Teleport destination id */
   dest?: string;
   /** Short text drawn on a pickup sprite */
   label?: string;
@@ -51,16 +53,18 @@ export interface PlayerSpawn {
 }
 
 export interface LevelZone {
-  name: string;
+  key: string;
+  id?: string;
   x: number;
   y: number;
   w: number;
   h: number;
 }
 
-/** Named cell — shoot/use/set-wall by name */
+/** Named cell — shoot/use/set-wall by id */
 export interface LevelMark {
-  name: string;
+  key: string;
+  id?: string;
   x: number;
   y: number;
 }
@@ -90,6 +94,7 @@ export interface GameLevel {
 
 export type EditorTool =
   | "select"
+  | "move"
   | "paint"
   | "erase"
   | "fill"
@@ -245,9 +250,9 @@ export function cloneLevel(level: GameLevel): GameLevel {
       ...row,
     ]),
     spawn: { ...level.spawn },
-    entities: level.entities.map((e) => ({ ...e })),
-    zones: level.zones?.map((z) => ({ ...z })),
-    marks: level.marks?.map((m) => ({ ...m })),
+    entities: level.entities.map((e) => withKey({ ...e })),
+    zones: (level.zones ?? []).map((z) => withKey({ ...z })),
+    marks: (level.marks ?? []).map((m) => withKey({ ...m })),
   };
 }
 
@@ -267,7 +272,7 @@ export function makeEmptyLevel(
     wallColors: colorGrid(width, height, 0),
     spawn: { x: 1.5, y: 1.5, angle: 0 },
     entities: [],
-    fogColor: "#0a0a0c",
+    fogColor: DEFAULT_FOG,
     author: "",
     script: "",
     zones: [],
@@ -277,4 +282,49 @@ export function makeEmptyLevel(
 
 export function uid(prefix = "e"): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+const AUTO_ID = /^[a-z]{1,4}_[a-z0-9]+$/i;
+
+export function isAutoId(id: string): boolean {
+  return AUTO_ID.test(id);
+}
+
+/** User-facing id from old or new JSON. Auto-generated ids are dropped. */
+export function readPublicId(id: unknown, name?: unknown): string | undefined {
+  const named = typeof name === "string" ? name.trim() : "";
+  if (named) return named;
+  const raw = typeof id === "string" ? id.trim() : "";
+  if (raw && !isAutoId(raw)) return raw;
+  return undefined;
+}
+
+export function withKey<T>(item: T): T & { key: string } {
+  const rec = item as T & { key?: string };
+  return rec.key ? (item as T & { key: string }) : { ...item, key: uid("k") };
+}
+
+export function ensureKeys(level: GameLevel): GameLevel {
+  level.entities = level.entities.map((e) => withKey(e));
+  level.zones = (level.zones ?? []).map((z) => withKey(z));
+  level.marks = (level.marks ?? []).map((m) => withKey(m));
+  return level;
+}
+
+export function levelIssues(level: GameLevel): string[] {
+  const issues: string[] = [];
+  if (!level.name.trim()) issues.push("This map has no title");
+  const seen = new Map<string, number>();
+  const add = (id?: string) => {
+    const v = id?.trim();
+    if (!v) return;
+    seen.set(v, (seen.get(v) ?? 0) + 1);
+  };
+  for (const e of level.entities) add(e.id);
+  for (const z of level.zones ?? []) add(z.id);
+  for (const m of level.marks ?? []) add(m.id);
+  for (const [id, n] of seen) {
+    if (n > 1) issues.push(`id “${id}” is used ${n} times`);
+  }
+  return issues;
 }

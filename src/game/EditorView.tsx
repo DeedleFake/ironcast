@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type {
   EditorTool,
   EnemyVariant,
@@ -15,6 +15,7 @@ import {
   WALL_TEXTURE_COUNT,
   cloneLevel,
   hexFromColor,
+  levelIssues,
   makeEmptyLevel,
   MAP_MAX,
   MAP_MIN,
@@ -22,6 +23,7 @@ import {
   resizeLevel,
   seedWallColors,
   uid,
+  withKey,
 } from "./types";
 import { upsertCustomLevel } from "./levels";
 import { ExportMenu, ImportMenu } from "./FileMenu";
@@ -38,6 +40,7 @@ import {
   MapPin,
   Minus,
   MousePointer2,
+  Move,
   PaintBucket,
   Paintbrush,
   Pipette,
@@ -104,6 +107,7 @@ const META_TOOLS: {
   icon: React.ReactNode;
 }[] = [
   { id: "select", label: "Select", hint: "V", icon: <MousePointer2 className="size-4" /> },
+  { id: "move", label: "Move", hint: "M", icon: <Move className="size-4" /> },
   { id: "erase", label: "Erase", hint: "E", icon: <Eraser className="size-4" /> },
   { id: "eyedrop", label: "Pick", hint: "I", icon: <Pipette className="size-4" /> },
 ];
@@ -173,7 +177,7 @@ function hitAt(level: GameLevel, x: number, y: number): SelItem {
   const ent = level.entities.find(
     (e) => Math.floor(e.x) === x && Math.floor(e.y) === y,
   );
-  if (ent) return { k: "entity", id: ent.id };
+  if (ent) return { k: "entity", id: ent.key };
   const mark = (level.marks ?? []).find((m) => m.x === x && m.y === y);
   if (mark) return { k: "mark", x, y };
   if (Math.floor(level.spawn.x) === x && Math.floor(level.spawn.y) === y) {
@@ -197,7 +201,7 @@ function itemsInBox(level: GameLevel, d: Drag): SelItem[] {
   for (const e of level.entities) {
     const x = Math.floor(e.x);
     const y = Math.floor(e.y);
-    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) out.push({ k: "entity", id: e.id });
+    if (x >= x0 && x <= x1 && y >= y0 && y <= y1) out.push({ k: "entity", id: e.key });
   }
   for (const m of level.marks ?? []) {
     if (m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1) {
@@ -217,7 +221,7 @@ function itemsInBox(level: GameLevel, d: Drag): SelItem[] {
 
 function pruneSel(level: GameLevel, sel: SelItem[]): SelItem[] {
   return sel.filter((s) => {
-    if (s.k === "entity") return level.entities.some((e) => e.id === s.id);
+    if (s.k === "entity") return level.entities.some((e) => e.key === s.id);
     if (s.k === "mark") {
       return (level.marks ?? []).some((m) => m.x === s.x && m.y === s.y);
     }
@@ -283,7 +287,7 @@ function isDrawTool(t: EditorTool) {
   );
 }
 function isMetaTool(t: EditorTool) {
-  return t === "select" || t === "erase" || t === "eyedrop";
+  return t === "select" || t === "move" || t === "erase" || t === "eyedrop";
 }
 function isAreaTool(t: EditorTool) {
   return t === "zone" || t === "mark";
@@ -304,6 +308,7 @@ const TOOL_KEY: Record<string, EditorTool> = {
   KeyL: "line",
   KeyI: "eyedrop",
   KeyV: "select",
+  KeyM: "move",
 };
 
 export function EditorView({ initial, onExit, onPlay }: Props) {
@@ -325,6 +330,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [sizeH, setSizeH] = useState(level.height);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [scriptH, setScriptH] = useState(224);
+  const [scriptW, setScriptW] = useState(400);
   const [helpOpen, setHelpOpen] = useState(false);
   const [cellSize, setCellSize] = useState(22);
   const [status, setStatus] = useState("");
@@ -362,7 +368,13 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const futureRef = useRef<GameLevel[]>([]);
   const strokeBaseRef = useRef<GameLevel | null>(null);
   const dragRef = useRef<Drag | null>(null);
-  const scriptDragRef = useRef<{ y: number; h: number } | null>(null);
+  const scriptDragRef = useRef<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    axis: "h" | "w";
+  } | null>(null);
 
   const syncHist = () => {
     setCanUndo(pastRef.current.length > 0);
@@ -509,6 +521,21 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       }
       const mod = e.ctrlKey || e.metaKey;
       if (mod) {
+        if (e.code === "KeyA") {
+          e.preventDefault();
+          const L = levelRef.current;
+          setTool((t) => (t === "move" ? t : "select"));
+          setBrush({ kind: "none" });
+          setSelection(
+            itemsInBox(L, {
+              x0: 0,
+              y0: 0,
+              x1: L.width - 1,
+              y1: L.height - 1,
+            }),
+          );
+          return;
+        }
         if (e.code === "KeyZ" && e.shiftKey) {
           e.preventDefault();
           redo();
@@ -546,7 +573,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   }, [undo, redo, chooseDrawTool, chooseMetaTool, chooseBrush]);
 
   useEffect(() => {
-    if (tool !== "select") setSelection([]);
+    if (tool !== "select" && tool !== "move") setSelection([]);
   }, [tool]);
 
   useEffect(() => {
@@ -629,19 +656,19 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     );
     if (ent) {
       chooseBrush({ kind: "thing", thing: ent.type });
-      setThingName(ent.name || "");
+      setThingName(ent.id || "");
       setThingDest(ent.dest || "");
       setThingLabel(ent.label || "?");
       setThingColor(ent.color ?? DEFAULT_PICKUP);
       setVariant(ent.variant === "bruiser" ? "bruiser" : "grunt");
-      setStatus(`Picked ${ent.name || ent.type}`);
+      setStatus(`Picked ${ent.id || ent.type}`);
       return;
     }
     const mark = (L.marks ?? []).find((m) => m.x === x && m.y === y);
     if (mark) {
       chooseAreaTool("mark");
-      setThingName(mark.name);
-      setStatus(`Picked mark ${mark.name}`);
+      setThingName(mark.id || "");
+      setStatus(`Picked mark${mark.id ? ` ${mark.id}` : ""}`);
       return;
     }
     const tex = L.walls[y]![x] ?? 0;
@@ -730,16 +757,20 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     tool;
   const nameKind =
     brush.kind === "thing" && brush.thing !== "spawn" ? brush.thing : null;
-  const namePlaceholder = nameKind ? autoName(level, nameKind) : "name";
   const showBrushInspector =
     tool !== "select" &&
+    tool !== "move" &&
     (brush.kind === "thing" || brush.kind === "wall");
   const liveSel = pruneSel(level, selection);
+  const moveView =
+    tool === "move" && drag
+      ? clampMove(level, liveSel, drag.x1 - drag.x0, drag.y1 - drag.y0)
+      : { dx: 0, dy: 0 };
   const can = sharedOpts(level, liveSel);
   const selCells = liveSel.filter((s) => s.k === "cell");
   const selEnts = liveSel
     .filter((s): s is { k: "entity"; id: string } => s.k === "entity")
-    .map((s) => level.entities.find((e) => e.id === s.id))
+    .map((s) => level.entities.find((e) => e.key === s.id))
     .filter((e): e is LevelEntity => Boolean(e));
   const selEnemies = selEnts.filter((e) => e.type === "enemy");
   const selEmpties = selCells.filter(
@@ -752,7 +783,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     let x = -1;
     let y = -1;
     if (s.k === "entity") {
-      const e = level.entities.find((ent) => ent.id === s.id);
+      const e = level.entities.find((ent) => ent.key === s.id);
       if (!e) continue;
       x = Math.floor(e.x);
       y = Math.floor(e.y);
@@ -816,16 +847,17 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     commitEdit(next);
   };
 
+  const mapIssues = levelIssues(level);
   const selTitle =
     liveSel.length === 0
       ? "Selected"
       : liveSel.length === 1
         ? singleEnt
-          ? singleEnt.name || singleEnt.type
+          ? singleEnt.id || singleEnt.type
           : singleMark
-            ? singleMark.name
+            ? singleMark.id || "Mark"
             : singleZone
-              ? singleZone.name
+              ? singleZone.id || "Zone"
               : hasSpawn
                 ? "Spawn"
                 : selCells[0] && (level.walls[selCells[0].y]?.[selCells[0].x] ?? 0) === 0
@@ -935,27 +967,15 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+      <div className="flex min-h-0 flex-1 flex-col xl:flex-row">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
         <aside className="flex max-h-[42vh] shrink-0 flex-col overflow-y-auto border-b border-border bg-surface-2 md:max-h-none md:w-52 md:border-r md:border-b-0">
           <div className="flex flex-col gap-3 p-2">
             <p className="text-[10px] tracking-widest text-dim uppercase">
               Palette
             </p>
 
-            <Section title="Draw">
-              <div className="grid grid-cols-3 gap-1">
-                {DRAW_TOOLS.map((t) => (
-                  <ToolCell
-                    key={t.id}
-                    tool={t}
-                    active={tool === t.id}
-                    onClick={() => chooseDrawTool(t.id)}
-                  />
-                ))}
-              </div>
-            </Section>
-
-            <Section title="Erase & pick">
+            <Section title="Tools">
               <div className="grid grid-cols-3 gap-1">
                 {META_TOOLS.map((t) => (
                   <button
@@ -996,6 +1016,19 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     </button>
                   );
                 })}
+              </div>
+            </Section>
+
+            <Section title="Draw">
+              <div className="grid grid-cols-3 gap-1">
+                {DRAW_TOOLS.map((t) => (
+                  <ToolCell
+                    key={t.id}
+                    tool={t}
+                    active={tool === t.id}
+                    onClick={() => chooseDrawTool(t.id)}
+                  />
+                ))}
               </div>
             </Section>
 
@@ -1061,7 +1094,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
             </Section>
           </div>
 
-          {tool === "select" ? (
+          {tool === "select" || tool === "move" ? (
             <div className="flex flex-col gap-3 border-t border-border p-2">
               <p className="text-[10px] tracking-widest text-dim uppercase">
                 Selected
@@ -1070,7 +1103,9 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               <Section title={selTitle}>
                 {liveSel.length === 0 ? (
                   <p className="text-[10px] leading-snug text-dim">
-                    Click a thing, or drag a box. Hold Shift to add or remove.
+                    {tool === "move"
+                      ? "Select something first, then drag to move it."
+                      : "Click a thing, or drag a box. Hold Shift to add or remove. Ctrl+A selects all."}
                   </p>
                 ) : null}
                 {liveSel.length > 0 && !hasThingOpts && !showFloor ? (
@@ -1080,29 +1115,29 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 ) : null}
                 {can.has("name") ? (
                   <label className="block text-[11px] text-muted">
-                    Name
+                    Id
                     <input
                       value={
-                        singleEnt?.name ??
-                        singleMark?.name ??
-                        singleZone?.name ??
+                        singleEnt?.id ??
+                        singleMark?.id ??
+                        singleZone?.id ??
                         ""
                       }
                       onChange={(e) => {
-                        const name = e.target.value;
+                        const nextId = e.target.value.trim() || undefined;
                         const item = liveSel[0]!;
                         editSel((L) => {
                           if (item.k === "entity") {
-                            const ent = L.entities.find((x) => x.id === item.id);
-                            if (ent) ent.name = name;
+                            const ent = L.entities.find((x) => x.key === item.id);
+                            if (ent) ent.id = nextId;
                           } else if (item.k === "mark") {
                             const m = (L.marks ?? []).find(
                               (x) => x.x === item.x && x.y === item.y,
                             );
-                            if (m) m.name = name;
+                            if (m) m.id = nextId;
                           } else if (item.k === "zone") {
                             const z = (L.zones ?? [])[item.i];
-                            if (z) z.name = name;
+                            if (z) z.id = nextId;
                           }
                         });
                       }}
@@ -1123,7 +1158,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           if (ent) ent.dest = dest;
                         });
                       }}
-                      placeholder="name of a mark"
+                      placeholder="id of a mark"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -1244,7 +1279,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                             for (const e of L.entities) {
                               if (
                                 e.type === "enemy" &&
-                                selEnemies.some((s) => s.id === e.id)
+                                selEnemies.some((s) => s.key === e.key)
                               ) {
                                 e.variant = v;
                               }
@@ -1388,16 +1423,16 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 {nameKind ? (
                   <>
                     <label className="block text-[11px] text-muted">
-                      Name
+                      Id
                       <input
                         value={thingName}
                         onChange={(e) => setThingName(e.target.value)}
-                        placeholder={namePlaceholder}
+                        placeholder="optional"
                         className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                       />
                     </label>
                     <p className="text-[10px] leading-snug text-dim">
-                      Leave blank to use {namePlaceholder}.
+                      Blank means the script cannot refer to this thing.
                     </p>
                   </>
                 ) : null}
@@ -1425,7 +1460,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     <input
                       value={thingDest}
                       onChange={(e) => setThingDest(e.target.value)}
-                      placeholder="name of a mark"
+                      placeholder="id of a mark"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -1501,7 +1536,9 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
           className="relative min-h-0 flex-1 overflow-auto bg-[#0e0e12] p-2"
         >
           <div
-            className="relative mx-auto touch-none select-none"
+            className={`relative mx-auto touch-none select-none ${
+              tool === "move" ? "cursor-move" : ""
+            }`}
             style={{
               width: level.width * cellSize,
               height: level.height * cellSize,
@@ -1513,6 +1550,16 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               const t = toolRef.current;
               const b = brushRef.current;
               if (t === "select") {
+                const d = { x0: x, y0: y, x1: x, y1: y };
+                dragRef.current = d;
+                setDrag(d);
+                return;
+              }
+              if (t === "move") {
+                if (!selection.length) {
+                  setStatus("Select something first");
+                  return;
+                }
                 const d = { x0: x, y0: y, x1: x, y1: y };
                 dragRef.current = d;
                 setDrag(d);
@@ -1560,7 +1607,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 pickFrom(x, y);
                 return;
               }
-              if (t === "select") {
+              if (t === "select" || t === "move") {
                 const cur = dragRef.current;
                 if (!cur) return;
                 const next = { ...cur, x1: x, y1: y };
@@ -1604,18 +1651,28 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 setSelection((prev) => mergeSel(prev, items, e.shiftKey));
                 return;
               }
+              if (t === "move" && d) {
+                const L = levelRef.current;
+                const rawX = d.x1 - d.x0;
+                const rawY = d.y1 - d.y0;
+                const { dx, dy } = clampMove(L, selection, rawX, rawY);
+                if (!dx && !dy) return;
+                const next = cloneLevel(L);
+                const moved = moveSelection(next, selection, dx, dy);
+                if (commitEdit(next)) setSelection(moved);
+                return;
+              }
               if (d && isZoneBrush(b) && t !== "erase" && t !== "eyedrop") {
                 const x0 = Math.min(d.x0, d.x1);
                 const y0 = Math.min(d.y0, d.y1);
                 const w = Math.abs(d.x1 - d.x0) + 1;
                 const h = Math.abs(d.y1 - d.y0) + 1;
-                const name = resolveName(
-                  levelRef.current,
-                  "zone",
-                  nameRef.current,
-                );
                 const next = cloneLevel(levelRef.current);
-                next.zones = [...(next.zones ?? []), { name, x: x0, y: y0, w, h }];
+                const id = nameRef.current.trim() || undefined;
+                next.zones = [
+                  ...(next.zones ?? []),
+                  withKey({ id, x: x0, y: y0, w, h }),
+                ];
                 commitEdit(next);
                 return;
               }
@@ -1718,12 +1775,12 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           {ent.type === "teleport" && "◎"}
                           {ent.type === "pickup" && (ent.label || "?")}
                         </span>
-                        {ent.name ? (
+                        {ent.id ? (
                           <span
-                            title={ent.name}
+                            title={ent.id}
                             className="absolute bottom-0 left-0 max-w-full truncate rounded-sm bg-black/70 px-0.5 font-mono text-[8px] leading-tight text-fg"
                           >
-                            {ent.name}
+                            {ent.id}
                           </span>
                         ) : null}
                       </>
@@ -1753,8 +1810,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     key={selKey(s)}
                     className="pointer-events-none absolute ring-2 ring-accent"
                     style={{
-                      left: z.x * cellSize,
-                      top: z.y * cellSize,
+                      left: (z.x + moveView.dx) * cellSize,
+                      top: (z.y + moveView.dy) * cellSize,
                       width: z.w * cellSize,
                       height: z.h * cellSize,
                     }}
@@ -1770,7 +1827,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 x = Math.floor(level.spawn.x);
                 y = Math.floor(level.spawn.y);
               } else {
-                const ent = level.entities.find((e) => e.id === s.id);
+                const ent = level.entities.find((e) => e.key === s.id);
                 if (!ent) return null;
                 x = Math.floor(ent.x);
                 y = Math.floor(ent.y);
@@ -1780,17 +1837,44 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   key={selKey(s)}
                   className="pointer-events-none absolute ring-2 ring-primary"
                   style={{
-                    left: x * cellSize,
-                    top: y * cellSize,
+                    left: (x + moveView.dx) * cellSize,
+                    top: (y + moveView.dy) * cellSize,
                     width: cellSize,
                     height: cellSize,
                   }}
                 />
               );
             })}
+            {moveView.dx || moveView.dy
+              ? selCells.map((s) => {
+                  const wall = level.walls[s.y]?.[s.x] ?? 0;
+                  return (
+                    <div
+                      key={`mv-${s.x}-${s.y}`}
+                      className="pointer-events-none absolute ring-1 ring-primary/70"
+                      style={{
+                        left: (s.x + moveView.dx) * cellSize,
+                        top: (s.y + moveView.dy) * cellSize,
+                        width: cellSize,
+                        height: cellSize,
+                        background:
+                          wall > 0
+                            ? hexFromColor(
+                                level.wallColors[s.y]?.[s.x] ||
+                                  defaultWallColor(wall),
+                              )
+                            : hexFromColor(
+                                level.floors[s.y]?.[s.x] ?? DEFAULT_FLOOR,
+                              ),
+                        opacity: 0.7,
+                      }}
+                    />
+                  );
+                })
+              : null}
             {(level.zones ?? []).map((z, i) => (
               <div
-                key={`z-${z.name}-${i}`}
+                key={`z-${z.key}`}
                 className="pointer-events-none absolute border border-accent/60 bg-accent/15"
                 style={{
                   left: z.x * cellSize,
@@ -1811,13 +1895,13 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     );
                   }}
                 >
-                  {z.name}
+                  {z.id ?? "zone"}
                 </span>
               </div>
             ))}
             {(level.marks ?? []).map((m) => (
               <div
-                key={`m-${m.name}-${m.x}-${m.y}`}
+                key={`m-${m.key}`}
                 className="pointer-events-none absolute flex items-start justify-end"
                 style={{
                   left: m.x * cellSize,
@@ -1827,7 +1911,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 }}
               >
                 <span className="rounded-sm bg-primary px-0.5 font-mono text-[8px] text-fg">
-                  {m.name}
+                  {m.id ?? "•"}
                 </span>
               </div>
             ))}
@@ -1837,25 +1921,35 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
 
       {scriptOpen ? (
         <div
-          className="flex shrink-0 flex-col border-t border-border bg-surface"
-          style={{ height: scriptH }}
+          className="flex h-[var(--script-h)] min-h-0 shrink-0 flex-col border-t border-border bg-surface xl:h-auto xl:w-[var(--script-w)] xl:border-t-0 xl:border-l"
+          style={
+            {
+              "--script-h": `${scriptH}px`,
+              "--script-w": `${scriptW}px`,
+            } as CSSProperties
+          }
         >
           <div
             role="separator"
             aria-orientation="horizontal"
             aria-label="Resize script editor"
-            className="flex h-3 shrink-0 cursor-row-resize items-center justify-center hover:bg-surface-2"
+            className="flex h-3 shrink-0 cursor-row-resize items-center justify-center hover:bg-surface-2 xl:hidden"
             onPointerDown={(e) => {
               e.preventDefault();
-              scriptDragRef.current = { y: e.clientY, h: scriptH };
+              scriptDragRef.current = {
+                x: e.clientX,
+                y: e.clientY,
+                w: scriptW,
+                h: scriptH,
+                axis: "h",
+              };
               (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
             }}
             onPointerMove={(e) => {
               const d = scriptDragRef.current;
-              if (!d) return;
+              if (!d || d.axis !== "h") return;
               const max = Math.floor(window.innerHeight * 0.7);
-              const next = Math.max(140, Math.min(max, d.h + (d.y - e.clientY)));
-              setScriptH(next);
+              setScriptH(Math.max(140, Math.min(max, d.h + (d.y - e.clientY))));
             }}
             onPointerUp={() => {
               scriptDragRef.current = null;
@@ -1866,22 +1960,56 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
           >
             <span className="h-1 w-10 rounded-full bg-border" />
           </div>
-          <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
-            <ScriptEditor
-              value={level.script ?? ""}
-              onChange={(src) => setLevel((l) => ({ ...l, script: src }))}
-              error={
-                (level.script ?? "").trim()
-                  ? (() => {
-                      const r = compileProgram(level.script ?? "");
-                      return r.ok ? "" : r.error;
-                    })()
-                  : ""
-              }
-            />
+          <div className="flex min-h-0 min-w-0 flex-1">
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize script editor"
+              className="hidden w-3 shrink-0 cursor-col-resize items-center justify-center hover:bg-surface-2 xl:flex"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                scriptDragRef.current = {
+                  x: e.clientX,
+                  y: e.clientY,
+                  w: scriptW,
+                  h: scriptH,
+                  axis: "w",
+                };
+                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+              }}
+              onPointerMove={(e) => {
+                const d = scriptDragRef.current;
+                if (!d || d.axis !== "w") return;
+                const max = Math.floor(window.innerWidth * 0.5);
+                setScriptW(Math.max(280, Math.min(max, d.w + (d.x - e.clientX))));
+              }}
+              onPointerUp={() => {
+                scriptDragRef.current = null;
+              }}
+              onPointerCancel={() => {
+                scriptDragRef.current = null;
+              }}
+            >
+              <span className="h-10 w-1 rounded-full bg-border" />
+            </div>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col px-2 pt-2 pb-2 xl:pt-2">
+              <ScriptEditor
+                value={level.script ?? ""}
+                onChange={(src) => setLevel((l) => ({ ...l, script: src }))}
+                error={
+                  (level.script ?? "").trim()
+                    ? (() => {
+                        const r = compileProgram(level.script ?? "");
+                        return r.ok ? "" : r.error;
+                      })()
+                    : ""
+                }
+              />
+            </div>
           </div>
         </div>
       ) : null}
+      </div>
 
       {helpOpen ? (
         <ScriptHelp onClose={() => setHelpOpen(false)} />
@@ -1893,14 +2021,21 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
             {level.entities.length} placed ·{" "}
             {tool === "select"
             ? liveSel.length
-              ? `Select · ${liveSel.length} selected · Shift adds`
+              ? `Select · ${liveSel.length} selected · Shift adds · Ctrl+A all`
               : "Select · click or drag a box · Shift adds"
+            : tool === "move"
+              ? liveSel.length
+                ? `Move · drag to shift ${liveSel.length} selected`
+                : "Move · select something first"
             : isAreaTool(tool)
               ? toolLabel
               : brushLabel
                 ? `${toolLabel} · ${brushLabel}`
                 : toolLabel}
           </span>
+          {mapIssues.length ? (
+            <span className="text-primary">{mapIssues.join(" · ")}</span>
+          ) : null}
         </span>
         <span className="min-w-0 truncate text-accent">{status}</span>
         <span className="hidden sm:inline">Right-click erases · Alt-click picks</span>
@@ -2067,41 +2202,6 @@ function IconBtn({
   );
 }
 
-const NAME_PREFIX: Record<string, string> = {
-  door: "door",
-  teleport: "pad",
-  pickup: "item",
-  enemy: "enemy",
-  ammo: "ammo",
-  health: "health",
-  exit: "exit",
-  zone: "zone",
-  mark: "mark",
-};
-
-function usedNames(level: GameLevel): Set<string> {
-  const names = new Set<string>();
-  for (const e of level.entities) {
-    if (e.name) names.add(e.name);
-  }
-  for (const z of level.zones ?? []) names.add(z.name);
-  for (const m of level.marks ?? []) names.add(m.name);
-  return names;
-}
-
-function autoName(level: GameLevel, kind: string): string {
-  const prefix = NAME_PREFIX[kind] ?? kind;
-  const used = usedNames(level);
-  let n = 1;
-  while (used.has(`${prefix}-${n}`)) n += 1;
-  return `${prefix}-${n}`;
-}
-
-function resolveName(level: GameLevel, kind: string, typed: string): string {
-  const name = typed.trim();
-  return name || autoName(level, kind);
-}
-
 function applyBrushTo(
   level: GameLevel,
   x: number,
@@ -2149,10 +2249,11 @@ function applyBrushTo(
     }
     return;
   }
+  const id = extra.name.trim() || undefined;
   if (brush.thing === "mark") {
     level.marks = [
       ...(level.marks ?? []).filter((m) => !(m.x === x && m.y === y)),
-      { name: resolveName(level, "mark", extra.name), x, y },
+      withKey({ id, x, y }),
     ];
     return;
   }
@@ -2166,31 +2267,29 @@ function applyBrushTo(
   if (brush.thing === "exit") {
     level.entities = level.entities.filter((e) => e.type !== "exit");
   }
-  const name = resolveName(level, brush.thing, extra.name);
-  level.entities.push({
-    id: uid(brush.thing.slice(0, 2)),
-    type: brush.thing,
-    x: x + 0.5,
-    y: y + 0.5,
-    name,
-    dest: brush.thing === "teleport" ? extra.dest.trim() || undefined : undefined,
-    label:
-      brush.thing === "pickup"
-        ? (extra.label.trim() || "?").slice(0, 3)
-        : undefined,
-    color: brush.thing === "pickup" ? extra.color : undefined,
-    variant: brush.thing === "enemy" ? extra.variant : undefined,
-    locked: brush.thing === "door" ? false : undefined,
-  });
+  level.entities.push(
+    withKey({
+      id,
+      type: brush.thing,
+      x: x + 0.5,
+      y: y + 0.5,
+      dest: brush.thing === "teleport" ? extra.dest.trim() || undefined : undefined,
+      label:
+        brush.thing === "pickup"
+          ? (extra.label.trim() || "?").slice(0, 3)
+          : undefined,
+      color: brush.thing === "pickup" ? extra.color : undefined,
+      variant: brush.thing === "enemy" ? extra.variant : undefined,
+      locked: brush.thing === "door" ? false : undefined,
+    }),
+  );
 }
 
 function eraseOnce(level: GameLevel, x: number, y: number) {
-  const wall = level.walls[y]![x] ?? 0;
   const hasEnt = level.entities.some(
     (e) => Math.floor(e.x) === x && Math.floor(e.y) === y,
   );
-  if (wall > 0 || hasEnt) {
-    level.walls[y]![x] = 0;
+  if (hasEnt) {
     removeEntityAt(level, x, y);
     return;
   }
@@ -2215,6 +2314,160 @@ function eraseOnce(level: GameLevel, x: number, y: number) {
   if (hit >= 0) {
     level.zones = zones.filter((_, i) => i !== hit);
   }
+}
+
+function selBounds(
+  level: GameLevel,
+  sel: SelItem[],
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  let any = false;
+  const add = (x: number, y: number, x1 = x, y1 = y) => {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x1);
+    maxY = Math.max(maxY, y1);
+    any = true;
+  };
+  for (const s of sel) {
+    if (s.k === "cell" || s.k === "mark") add(s.x, s.y);
+    else if (s.k === "entity") {
+      const e = level.entities.find((x) => x.key === s.id);
+      if (e) add(Math.floor(e.x), Math.floor(e.y));
+    } else if (s.k === "zone") {
+      const z = (level.zones ?? [])[s.i];
+      if (z) add(z.x, z.y, z.x + z.w - 1, z.y + z.h - 1);
+    } else if (s.k === "spawn") {
+      add(Math.floor(level.spawn.x), Math.floor(level.spawn.y));
+    }
+  }
+  return any ? { minX, minY, maxX, maxY } : null;
+}
+
+function clampMove(
+  level: GameLevel,
+  sel: SelItem[],
+  dx: number,
+  dy: number,
+): { dx: number; dy: number } {
+  const b = selBounds(level, sel);
+  if (!b) return { dx: 0, dy: 0 };
+  return {
+    dx: Math.max(-b.minX, Math.min(level.width - 1 - b.maxX, dx)),
+    dy: Math.max(-b.minY, Math.min(level.height - 1 - b.maxY, dy)),
+  };
+}
+
+function moveSelection(
+  level: GameLevel,
+  sel: SelItem[],
+  dx: number,
+  dy: number,
+): SelItem[] {
+  if (!dx && !dy) return sel;
+  const cellSnaps = sel
+    .filter((s): s is { k: "cell"; x: number; y: number } => s.k === "cell")
+    .map((s) => ({
+      x: s.x,
+      y: s.y,
+      wall: level.walls[s.y]![s.x] ?? 0,
+      floor: level.floors[s.y]?.[s.x] ?? DEFAULT_FLOOR,
+      ceil: level.ceils[s.y]?.[s.x] ?? DEFAULT_CEIL,
+      wallColor: level.wallColors[s.y]?.[s.x] ?? 0,
+    }));
+  const movingKeys = new Set(
+    sel.filter((s): s is { k: "entity"; id: string } => s.k === "entity").map((s) => s.id),
+  );
+  const movingMarks = sel.filter(
+    (s): s is { k: "mark"; x: number; y: number } => s.k === "mark",
+  );
+  const markKeys = new Set(
+    (level.marks ?? [])
+      .filter((m) => movingMarks.some((s) => s.x === m.x && s.y === m.y))
+      .map((m) => m.key),
+  );
+  const movingZones = sel.filter((s): s is { k: "zone"; i: number } => s.k === "zone");
+  const moveSpawn = sel.some((s) => s.k === "spawn");
+
+  for (const s of cellSnaps) {
+    level.walls[s.y]![s.x] = 0;
+    level.floors[s.y]![s.x] = DEFAULT_FLOOR;
+    level.ceils[s.y]![s.x] = DEFAULT_CEIL;
+    if (level.wallColors[s.y]) level.wallColors[s.y]![s.x] = 0;
+  }
+  if (!level.wallColors) level.wallColors = seedWallColors(level.walls);
+  for (const s of cellSnaps) {
+    const nx = s.x + dx;
+    const ny = s.y + dy;
+    const isSpawn =
+      Math.floor(level.spawn.x) === nx && Math.floor(level.spawn.y) === ny;
+    if (s.wall > 0 && isSpawn) continue;
+    level.walls[ny]![nx] = s.wall;
+    level.floors[ny]![nx] = s.floor;
+    level.ceils[ny]![nx] = s.ceil;
+    level.wallColors[ny]![nx] = s.wallColor;
+    if (s.wall > 0) {
+      level.entities = level.entities.filter(
+        (e) =>
+          movingKeys.has(e.key) ||
+          Math.floor(e.x) !== nx ||
+          Math.floor(e.y) !== ny,
+      );
+    }
+  }
+
+  for (const e of level.entities) {
+    if (movingKeys.has(e.key)) {
+      e.x += dx;
+      e.y += dy;
+    }
+  }
+  const destEnt = new Set<string>();
+  for (const e of level.entities) {
+    if (movingKeys.has(e.key)) {
+      destEnt.add(`${Math.floor(e.x)},${Math.floor(e.y)}`);
+    }
+  }
+  level.entities = level.entities.filter((e) => {
+    if (movingKeys.has(e.key)) return true;
+    return !destEnt.has(`${Math.floor(e.x)},${Math.floor(e.y)}`);
+  });
+
+  if (level.marks) {
+    for (const m of level.marks) {
+      if (markKeys.has(m.key)) {
+        m.x += dx;
+        m.y += dy;
+      }
+    }
+    const destMark = new Set(
+      level.marks.filter((m) => markKeys.has(m.key)).map((m) => `${m.x},${m.y}`),
+    );
+    level.marks = level.marks.filter(
+      (m) => markKeys.has(m.key) || !destMark.has(`${m.x},${m.y}`),
+    );
+  }
+
+  for (const s of movingZones) {
+    const z = (level.zones ?? [])[s.i];
+    if (z) {
+      z.x += dx;
+      z.y += dy;
+    }
+  }
+
+  if (moveSpawn) {
+    level.spawn.x += dx;
+    level.spawn.y += dy;
+  }
+
+  return sel.map((s) => {
+    if (s.k === "cell" || s.k === "mark") return { ...s, x: s.x + dx, y: s.y + dy };
+    return s;
+  });
 }
 
 function removeEntityAt(level: GameLevel, x: number, y: number) {
@@ -2341,11 +2594,11 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
   }
   const key = (e: LevelEntity) =>
     [
-      e.id,
+      e.key,
+      e.id ?? "",
       e.type,
       e.x,
       e.y,
-      e.name ?? "",
       e.dest ?? "",
       e.label ?? "",
       e.color ?? "",
@@ -2356,13 +2609,13 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
   const be = b.entities.map(key).sort().join("|");
   if (ae !== be) return false;
   const za = (a.zones ?? [])
-    .map((z) => `${z.name}:${z.x}:${z.y}:${z.w}:${z.h}`)
+    .map((z) => `${z.key}:${z.id ?? ""}:${z.x}:${z.y}:${z.w}:${z.h}`)
     .join("|");
   const zb = (b.zones ?? [])
-    .map((z) => `${z.name}:${z.x}:${z.y}:${z.w}:${z.h}`)
+    .map((z) => `${z.key}:${z.id ?? ""}:${z.x}:${z.y}:${z.w}:${z.h}`)
     .join("|");
   if (za !== zb) return false;
-  const ma = (a.marks ?? []).map((m) => `${m.name}:${m.x}:${m.y}`).join("|");
-  const mb = (b.marks ?? []).map((m) => `${m.name}:${m.x}:${m.y}`).join("|");
+  const ma = (a.marks ?? []).map((m) => `${m.key}:${m.id ?? ""}:${m.x}:${m.y}`).join("|");
+  const mb = (b.marks ?? []).map((m) => `${m.key}:${m.id ?? ""}:${m.x}:${m.y}`).join("|");
   return ma === mb;
 }

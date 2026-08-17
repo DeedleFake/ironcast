@@ -12,6 +12,9 @@ const KIND_CLASS: Record<string, string> = {
   ws: "",
 };
 
+const FACE =
+  "box-border m-0 block h-full w-full p-2 font-mono text-xs leading-5 [tab-size:2] break-normal whitespace-pre";
+
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&")
@@ -20,7 +23,7 @@ function escapeHtml(s: string): string {
 }
 
 function highlightHtml(src: string): string {
-  return tokenize(src || " ")
+  const body = tokenize(src || " ")
     .map((t) => {
       const text = escapeHtml(t.text);
       const cls = KIND_CLASS[t.kind];
@@ -28,6 +31,8 @@ function highlightHtml(src: string): string {
       return `<span class="${cls}">${text}</span>`;
     })
     .join("");
+  // A trailing newline is eaten by <pre>; keep it so the layers stay lined up.
+  return `${body}\n`;
 }
 
 export function ScriptEditor({
@@ -43,17 +48,24 @@ export function ScriptEditor({
   const taRef = useRef<HTMLTextAreaElement>(null);
   const html = useMemo(() => highlightHtml(value), [value]);
 
-  useEffect(() => {
+  const syncScroll = () => {
     const ta = taRef.current;
     const pre = preRef.current;
     if (!ta || !pre) return;
-    const sync = () => {
-      pre.scrollTop = ta.scrollTop;
-      pre.scrollLeft = ta.scrollLeft;
-    };
-    ta.addEventListener("scroll", sync);
-    return () => ta.removeEventListener("scroll", sync);
+    pre.scrollTop = ta.scrollTop;
+    pre.scrollLeft = ta.scrollLeft;
+  };
+
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.addEventListener("scroll", syncScroll);
+    return () => ta.removeEventListener("scroll", syncScroll);
   }, []);
+
+  useEffect(() => {
+    syncScroll();
+  }, [value]);
 
   const format = () => {
     const result = formatLisp(value);
@@ -76,15 +88,17 @@ export function ScriptEditor({
         <pre
           ref={preRef}
           aria-hidden
-          className="pointer-events-none absolute inset-0 overflow-auto p-2 font-mono text-xs leading-5 whitespace-pre"
-          dangerouslySetInnerHTML={{ __html: html || " " }}
+          className={`pointer-events-none absolute inset-0 overflow-hidden text-fg ${FACE}`}
+          dangerouslySetInnerHTML={{ __html: html }}
         />
         <textarea
           ref={taRef}
           value={value}
           spellCheck={false}
+          wrap="off"
           onChange={(e) => onChange(e.target.value)}
-          className="absolute inset-0 resize-none overflow-auto bg-transparent p-2 font-mono text-xs leading-5 text-transparent caret-fg outline-none"
+          onScroll={syncScroll}
+          className={`absolute inset-0 resize-none overflow-auto bg-transparent text-transparent caret-fg outline-none ${FACE}`}
         />
       </div>
       {error ? <p className="text-[11px] text-primary">{error}</p> : null}

@@ -136,7 +136,11 @@ export function ImportMenu({
             const result = await importLevelFile(f);
             if (result.ok) {
               onLevel(result.level);
-              onStatus?.(`Opened “${result.level.name}”`);
+              onStatus?.(
+                result.errors.length
+                  ? `Opened “${result.level.name}” · ${result.errors[0]}`
+                  : `Opened “${result.level.name}”`,
+              );
             } else {
               (onError ?? onStatus)?.(result.error);
             }

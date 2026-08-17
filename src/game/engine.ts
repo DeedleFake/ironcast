@@ -17,6 +17,7 @@ import { sfx, unlockAudio } from "./audio";
 import {
   compileProgram,
   evalForms,
+  installFns,
   fireHandlers,
   makeEnv,
   nil,
@@ -31,6 +32,7 @@ import {
 export type GameMode = "playing" | "paused" | "won" | "dead";
 
 export interface LiveEntity {
+  key: string;
   id: string;
   type: LevelEntity["type"];
   x: number;
@@ -39,7 +41,6 @@ export interface LiveEntity {
   alive: boolean;
   hurtFlash: number;
   attackCd: number;
-  name: string;
   dest: string;
   label: string;
   color: number;
@@ -207,7 +208,8 @@ export function createGameState(level: GameLevel): GameState {
 function liveFromLevel(e: LevelEntity): LiveEntity {
   const variant: EnemyVariant = e.variant === "bruiser" ? "bruiser" : "grunt";
   return {
-    id: e.id,
+    key: e.key || uid("k"),
+    id: e.id?.trim() ?? "",
     type: e.type,
     x: e.x,
     y: e.y,
@@ -215,7 +217,6 @@ function liveFromLevel(e: LevelEntity): LiveEntity {
     alive: true,
     hurtFlash: 0,
     attackCd: 0.5 + Math.random() * 0.5,
-    name: e.name || e.id,
     dest: e.dest || "",
     label: (e.label || "").trim().slice(0, 3),
     color: e.color ?? DEFAULT_PICKUP,
@@ -246,15 +247,18 @@ function closedDoorAt(state: GameState, ix: number, iy: number): LiveEntity | nu
 }
 
 function findNamed(state: GameState, name: string): LiveEntity | undefined {
-  return state.entities.find((e) => e.alive && (e.name === name || e.id === name));
+  if (!name) return undefined;
+  return state.entities.find((e) => e.alive && e.id === name);
 }
 
 function findMark(state: GameState, name: string) {
-  return (state.level.marks ?? []).find((m) => m.name === name);
+  if (!name) return undefined;
+  return (state.level.marks ?? []).find((m) => m.id === name);
 }
 
 function findZone(state: GameState, name: string) {
-  return (state.level.zones ?? []).find((z) => z.name === name);
+  if (!name) return undefined;
+  return (state.level.zones ?? []).find((z) => z.id === name);
 }
 
 function blocked(state: GameState, x: number, y: number): boolean {
@@ -334,7 +338,7 @@ function fireWeapon(state: GameState) {
     state.hitmarker = 0.12;
     sfx.hit();
     runScript(state, "hurt", {
-      target: str(best.name),
+      target: str(best.id),
       amount: num(HITSCAN_DAMAGE),
     });
     if (best.hp <= 0) {
@@ -343,7 +347,7 @@ function fireWeapon(state: GameState) {
       state.score += 100;
       sfx.enemyDie();
       runScript(state, "die", {
-        enemy: str(best.name),
+        enemy: str(best.id),
         x: num(best.x),
         y: num(best.y),
       });
@@ -357,7 +361,7 @@ function fireWeapon(state: GameState) {
     const mark = (state.level.marks ?? []).find(
       (m) => m.x === wall.x && m.y === wall.y,
     );
-    const who = door?.name || mark?.name || null;
+    const who = door?.id || mark?.id || null;
     runScript(state, "shoot", {
       target: str(who ?? ""),
       x: num(wall.x),
@@ -529,18 +533,18 @@ function updatePickups(state: GameState) {
       state.ammo = Math.min(MAX_AMMO, state.ammo + 15);
       state.score += 10;
       sfx.pickup();
-      runScript(state, "pickup", { target: str(e.name) });
+      runScript(state, "pickup", { target: str(e.id) });
     } else if (e.type === "health") {
       e.alive = false;
       state.health = Math.min(100, state.health + 25);
       state.score += 10;
       sfx.pickup();
-      runScript(state, "pickup", { target: str(e.name) });
+      runScript(state, "pickup", { target: str(e.id) });
     } else if (e.type === "pickup") {
       e.alive = false;
       sfx.pickup();
-      state.inventory.add(e.name);
-      runScript(state, "pickup", { target: str(e.name) });
+      if (e.id) state.inventory.add(e.id);
+      runScript(state, "pickup", { target: str(e.id) });
     } else if (e.type === "teleport") {
       if (state.teleportCd > 0 || !e.dest) continue;
       const destEnt = findNamed(state, e.dest);
@@ -555,7 +559,7 @@ function updatePickups(state: GameState) {
         state.py = dest.y;
         state.teleportCd = 0.85;
         sfx.pickup();
-        runScript(state, "teleport", { pad: str(e.name) });
+        runScript(state, "teleport", { pad: str(e.id) });
       }
     } else if (e.type === "exit") {
       if (state.kills >= state.totalEnemies) {
@@ -658,6 +662,7 @@ export function updateGame(state: GameState, dt: number) {
     if (state.scriptError) pushSay(state, state.scriptError);
     if (state.script) {
       try {
+        installFns(state.script.fns, state.scriptEnv);
         evalForms(state.script.boot, state.scriptEnv, makeHost(state));
       } catch (err) {
         state.scriptError = err instanceof Error ? err.message : "Script error";
@@ -797,18 +802,23 @@ function makeHost(state: GameState): Host {
         } else return "";
       }
       if (x === undefined || y === undefined) return "";
-      const id = uid(opts.type.slice(0, 2));
+      const key = uid("k");
+      const publicId = opts.id?.trim() || undefined;
       const ent = liveFromLevel({
-        id,
+        key,
+        id: publicId,
         type: opts.type as LevelEntity["type"],
         x,
         y,
-        name: opts.name || id,
         variant: opts.variant === "bruiser" ? "bruiser" : "grunt",
+        dest: opts.dest,
+        label: opts.label,
+        color: opts.color,
+        locked: opts.locked,
       });
       if (ent.type === "enemy") state.totalEnemies += 1;
       state.entities.push(ent);
-      return opts.name || id;
+      return publicId ?? "";
     },
     remove: (name) => {
       const e = findNamed(state, name);
@@ -870,14 +880,14 @@ function tryUse(state: GameState) {
   let bestD = 1.6;
   for (const e of state.entities) {
     if (!e.alive) continue;
-    if (e.type !== "door" && e.type !== "pickup" && !e.name) continue;
+    if (e.type !== "door" && e.type !== "pickup" && !e.id) continue;
     const d = Math.hypot(e.x - aheadX, e.y - aheadY);
     if (d < bestD) {
       bestD = d;
       best = e;
     }
   }
-  const who = best?.name || mark?.name || null;
+  const who = best?.id || mark?.id || null;
   if (best?.type === "door") {
     if (best.locked) {
       pushSay(state, "Locked");
@@ -908,7 +918,7 @@ function updateUseHint(state: GameState) {
         ? "E  Close"
         : "E  Open";
   } else if (mark) {
-    state.useHint = `E  Use ${mark.name}`;
+    state.useHint = mark.id ? `E  Use ${mark.id}` : "E  Use";
   } else {
     state.useHint = "";
   }
@@ -920,7 +930,9 @@ function updateZones(state: GameState) {
   const now = new Set<string>();
   for (const z of state.level.zones ?? []) {
     if (px >= z.x && py >= z.y && px < z.x + z.w && py < z.y + z.h) {
-      now.add(z.name);
+      if (z.id && px >= z.x && py >= z.y && px < z.x + z.w && py < z.y + z.h) {
+        now.add(z.id);
+      }
     }
   }
   for (const name of now) {

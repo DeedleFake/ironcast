@@ -1,6 +1,6 @@
 import type { ColorGrid, GameLevel } from "./types";
-import { LEVEL_VERSION, colorGrid, parseHexColor, seedWallColors, uid } from "./types";
-import { parseLevel } from "./levelIO";
+import { LEVEL_VERSION, colorGrid, parseHexColor, seedWallColors, uid, withKey } from "./types";
+import { parseLevel, toSavedLevel } from "./levelIO";
 import { formatLisp } from "./lisp";
 
 function prettyScript(src: string): string {
@@ -132,19 +132,19 @@ export function createOutpostLevel(): GameLevel {
     walls,
     spawn: { x: 3.5, y: 6.5, angle: 0 },
     entities: [
-      { id: uid("en"), type: "enemy", x: 16.5, y: 11.5 },
-      { id: uid("en"), type: "enemy", x: 18.5, y: 13.5 },
-      { id: uid("en"), type: "enemy", x: 14.5, y: 9.5 },
-      { id: uid("en"), type: "enemy", x: 26.5, y: 11.5 },
-      { id: uid("en"), type: "enemy", x: 10.5, y: 21.5 },
-      { id: uid("en"), type: "enemy", x: 22.5, y: 21.5 },
-      { id: uid("en"), type: "enemy", x: 4.5, y: 24.5 },
-      { id: uid("am"), type: "ammo", x: 8.5, y: 6.5 },
-      { id: uid("am"), type: "ammo", x: 27.5, y: 12.5 },
-      { id: uid("am"), type: "ammo", x: 16.5, y: 23.5 },
-      { id: uid("hp"), type: "health", x: 5.5, y: 5.5 },
-      { id: uid("hp"), type: "health", x: 20.5, y: 11.5 },
-      { id: uid("ex"), type: "exit", x: 28.5, y: 24.5 },
+      withKey({ type: "enemy", x: 16.5, y: 11.5 }),
+      withKey({ type: "enemy", x: 18.5, y: 13.5 }),
+      withKey({ type: "enemy", x: 14.5, y: 9.5 }),
+      withKey({ type: "enemy", x: 26.5, y: 11.5 }),
+      withKey({ type: "enemy", x: 10.5, y: 21.5 }),
+      withKey({ type: "enemy", x: 22.5, y: 21.5 }),
+      withKey({ type: "enemy", x: 4.5, y: 24.5 }),
+      withKey({ type: "ammo", x: 8.5, y: 6.5 }),
+      withKey({ type: "ammo", x: 27.5, y: 12.5 }),
+      withKey({ type: "ammo", x: 16.5, y: 23.5 }),
+      withKey({ type: "health", x: 5.5, y: 5.5 }),
+      withKey({ type: "health", x: 20.5, y: 11.5 }),
+      withKey({ type: "exit", x: 28.5, y: 24.5 }),
     ],
     floors: (() => {
       const g = fillColors(w, h, "#2c2620");
@@ -207,14 +207,14 @@ export function createReactorLevel(): GameLevel {
     walls,
     spawn: { x: 2.5, y: 2.5, angle: Math.PI / 4 },
     entities: [
-      { id: uid("en"), type: "enemy", x: 9.5, y: 3.5 },
-      { id: uid("en"), type: "enemy", x: 16.5, y: 9.5 },
-      { id: uid("en"), type: "enemy", x: 9.5, y: 16.5 },
-      { id: uid("en"), type: "enemy", x: 3.5, y: 9.5 },
-      { id: uid("en"), type: "enemy", x: 16.5, y: 16.5 },
-      { id: uid("am"), type: "ammo", x: 2.5, y: 9.5 },
-      { id: uid("hp"), type: "health", x: 17.5, y: 2.5 },
-      { id: uid("ex"), type: "exit", x: 17.5, y: 17.5 },
+      withKey({ type: "enemy", x: 9.5, y: 3.5 }),
+      withKey({ type: "enemy", x: 16.5, y: 9.5 }),
+      withKey({ type: "enemy", x: 9.5, y: 16.5 }),
+      withKey({ type: "enemy", x: 3.5, y: 9.5 }),
+      withKey({ type: "enemy", x: 16.5, y: 16.5 }),
+      withKey({ type: "ammo", x: 2.5, y: 9.5 }),
+      withKey({ type: "health", x: 17.5, y: 2.5 }),
+      withKey({ type: "exit", x: 17.5, y: 17.5 }),
     ],
     floors: (() => {
       const g = fillColors(w, h, "#1e2228");
@@ -287,13 +287,13 @@ export function createNightVaultLevel(): GameLevel {
     (announce "Vault lock dropped. Alarm!")
     (if not (get "sprung")
       (set "sprung" true)
-      (spawn type: "enemy" x: 11.5 y: 6.5 name: "warden" variant: "bruiser"))))
+      (spawn type: "enemy" x: 11.5 y: 6.5 id: "warden" variant: "bruiser"))))
 
 (on enter (zone:)
   (if (= zone "ambush")
     (if not (get "add")
       (set "add" true)
-      (spawn type: "enemy" x: 9.5 y: 6.5 name: "runner" variant: "grunt")
+      (spawn type: "enemy" x: 9.5 y: 6.5 id: "runner" variant: "grunt")
       (announce "Movement in the hall!"))
   else if (= zone "pad-in")
     (if (has "key-card")
@@ -329,53 +329,48 @@ export function createNightVaultLevel(): GameLevel {
     walls,
     spawn: { x: 3.5, y: 3.5, angle: 0 },
     entities: [
-      {
-        id: uid("dr"),
+      withKey({
         type: "door",
         x: 5.5,
         y: 3.5,
-        name: "door-cell",
+        id: "door-cell",
         locked: true,
-      },
-      {
-        id: uid("dr"),
+      }),
+      withKey({
         type: "door",
         x: 15.5,
         y: 3.5,
-        name: "door-vault",
+        id: "door-vault",
         locked: true,
-      },
-      {
-        id: uid("dr"),
+      }),
+      withKey({
         type: "door",
         x: 15.5,
         y: 9.5,
-        name: "door-exit",
+        id: "door-exit",
         locked: true,
-      },
-      {
-        id: uid("pk"),
+      }),
+      withKey({
         type: "pickup",
         x: 3.5,
         y: 9.5,
-        name: "key-card",
+        id: "key-card",
         label: "KEY",
         color: 0xd4a017,
-      },
-      { id: uid("hp"), type: "health", x: 18.5, y: 2.5 },
-      { id: uid("am"), type: "ammo", x: 8.5, y: 10.5 },
-      { id: uid("am"), type: "ammo", x: 3.5, y: 13.5 },
-      {
-        id: uid("tp"),
+      }),
+      withKey({ type: "health", x: 18.5, y: 2.5 }),
+      withKey({ type: "ammo", x: 8.5, y: 10.5 }),
+      withKey({ type: "ammo", x: 3.5, y: 13.5 }),
+      withKey({
         type: "teleport",
         x: 2.5,
         y: 13.5,
-        name: "pad-home",
+        id: "pad-home",
         dest: "hall-return",
-      },
-      { id: uid("en"), type: "enemy", x: 10.5, y: 3.5, name: "guard-a" },
-      { id: uid("en"), type: "enemy", x: 13.5, y: 9.5, name: "guard-b" },
-      { id: uid("ex"), type: "exit", x: 18.5, y: 9.5 },
+      }),
+      withKey({ type: "enemy", x: 10.5, y: 3.5, id: "guard-a" }),
+      withKey({ type: "enemy", x: 13.5, y: 9.5, id: "guard-b" }),
+      withKey({ type: "exit", x: 18.5, y: 9.5 }),
     ],
     floors: (() => {
       const g = fillColors(w, h, "#1c1a18");
@@ -399,13 +394,13 @@ export function createNightVaultLevel(): GameLevel {
     author: "Built-in",
     script,
     zones: [
-      { name: "ambush", x: 7, y: 2, w: 7, h: 8 },
-      { name: "pad-in", x: 17, y: 2, w: 3, h: 3 },
+      withKey({ id: "ambush", x: 7, y: 2, w: 7, h: 8 }),
+      withKey({ id: "pad-in", x: 17, y: 2, w: 3, h: 3 }),
     ],
     marks: [
-      { name: "panel", x: 5, y: 2 },
-      { name: "stash", x: 2, y: 13 },
-      { name: "hall-return", x: 8, y: 3 },
+      withKey({ id: "panel", x: 5, y: 2 }),
+      withKey({ id: "stash", x: 2, y: 13 }),
+      withKey({ id: "hall-return", x: 8, y: 3 }),
     ],
   };
 }
@@ -438,7 +433,10 @@ export function loadCustomLevels(): GameLevel[] {
 
 export function saveCustomLevels(levels: GameLevel[]) {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(levels));
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify(levels.map((l) => toSavedLevel(l))),
+  );
 }
 
 export function upsertCustomLevel(level: GameLevel) {

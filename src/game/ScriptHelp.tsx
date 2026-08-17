@@ -23,7 +23,7 @@ const SAMPLE_SRC = `(def announce (msg)
 (on enter (zone:)
   (if (= zone "ambush")
     (if not (get "sprung")
-      (spawn type: "enemy" x: 14.5 y: 8.5 name: "grunt-a")
+      (spawn type: "enemy" x: 14.5 y: 8.5 id: "grunt-a")
       (say "Ambush!")
       (set "sprung" true))))
 
@@ -428,6 +428,24 @@ else
           and the body.
         </p>
         <p>
+          A later <Code>def</Code> with the same name adds another clause. The
+          clauses must sit next to each other. A form between them is an
+          error.
+        </p>
+        <p>
+          A call tries clauses from top to bottom. The first match runs. A
+          name in the list matches any value. A literal matches only that
+          value. A clause that an earlier clause already covers is an error.
+        </p>
+        <p>Example:</p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
+          {`(def example ("test")
+  (say "A test."))
+
+(def example (value)
+  (say (str "This is a " value ".")))`}
+        </pre>
+        <p>
           <Code>(announce "Find the red key.")</Code> starts that
           function. <Code>announce</Code> is not a built-in function.
         </p>
@@ -445,7 +463,14 @@ else
         </p>
         <p>
           <Code>(example other: 2 an-arg: 1)</Code> calls that function. A
-          missing key binds <Code>nil</Code>. An unknown key is an error.
+          missing key binds <Code>nil</Code>. An unknown key is an error. The
+          allowed keys are the keys from every clause.
+        </p>
+        <p>
+          <Code>(def example (value: "test") ...)</Code> matches only when{" "}
+          <Code>value:</Code> is <Code>"test"</Code>. A key that a clause
+          does not list is not checked. To match <Code>nil</Code>, write{" "}
+          <Code>value: nil</Code>.
         </p>
         <p>
           Do not mix positional parameters and keyword parameters in one
@@ -603,9 +628,10 @@ function Events() {
           <Code>(on shoot (target:) ...)</Code> binds only <Code>target</Code>.
         </p>
         <p>
-          A missing key binds <Code>nil</Code>. The body starts for every
-          match of that event. <Code>if</Code> compares a parameter to a
-          string.
+          A missing key binds <Code>nil</Code>. The first matching clause
+          starts. A later <Code>on</Code> for the same event must sit next to
+          the last one. A clause that an earlier clause already covers is an
+          error.
         </p>
       </Block>
       <Block>
@@ -615,8 +641,9 @@ function Events() {
             <Code>(on start () ...)</Code> starts when the fight begins.
           </li>
           <li>
-            <Code>(on enter (zone:) ...)</Code> starts when the player walks
-            into a zone. <Code>zone</Code> is a string.
+            <Code>(on enter (zone: "ambush") ...)</Code> starts when the
+            player walks into that zone. <Code>(on enter (zone:) ...)</Code>{" "}
+            matches any zone.
           </li>
           <li>
             <Code>(on leave (zone:) ...)</Code> starts when the player leaves a
@@ -765,64 +792,110 @@ function Commands() {
       <Block>
         <H>spawn</H>
         <p>
-          <Code>spawn</Code> adds a thing to the map. The command returns the
-          name of the new thing. The call uses keys only.
+          <Code>spawn</Code> adds a thing. The call uses keys only. The
+          result is the name of the new thing.
+        </p>
+      </Block>
+      <Block>
+        <H>Place</H>
+        <p>
+          Every call needs <Code>type:</Code> and a place. The place is{" "}
+          <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>.
         </p>
         <p>
-          Required keys are <Code>type:</Code> and a place. The place is{" "}
-          <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>. Optional
-          keys are <Code>name:</Code> and <Code>variant:</Code>.
+          <Code>at:</Code> is the name of a mark or a thing. The new thing
+          appears at that place.
         </p>
         <p>
-          <Code>type:</Code> is a string: <Code>"enemy"</Code>,{" "}
+          <Code>x:</Code> and <Code>y:</Code> are map positions. The center
+          of a cell is a number that ends in <Code>.5</Code>.
+        </p>
+      </Block>
+      <Block>
+        <H>Shared keys</H>
+        <p>
+          <Code>type:</Code> is one of <Code>"enemy"</Code>,{" "}
           <Code>"ammo"</Code>, <Code>"health"</Code>,{" "}
           <Code>"exit"</Code>, <Code>"door"</Code>,{" "}
           <Code>"teleport"</Code>, or{" "}
           <Code>"pickup"</Code>.
         </p>
         <p>
-          <Code>at:</Code> is the name of a mark or a thing. The new thing
-          appears at that place. <Code>x:</Code> and <Code>y:</Code> are map
-          positions. The center of a cell is a number that ends in{" "}
-          <Code>.5</Code>.
+          <Code>id:</Code> is a string. <Code>str</Code> makes an id. If
+          the id is missing, the thing has no id. The script cannot refer to
+          it.
+        </p>
+      </Block>
+      <Block>
+        <H>enemy</H>
+        <p>
+          <Code>variant:</Code> is <Code>"grunt"</Code> or{" "}
+          <Code>"bruiser"</Code>. If the key is missing, the enemy
+          is a grunt.
+        </p>
+      </Block>
+      <Block>
+        <H>ammo, health, exit</H>
+        <p>These types have no extra keys. Only place, type, and name apply.</p>
+      </Block>
+      <Block>
+        <H>door</H>
+        <p>
+          <Code>locked:</Code> is <Code>true</Code> or <Code>false</Code>. If
+          the key is missing, the door is unlocked. A spawned door is closed.
+        </p>
+      </Block>
+      <Block>
+        <H>teleport</H>
+        <p>
+          <Code>dest:</Code> is the name of a mark. If the key is missing, the
+          pad has no destination.
+        </p>
+      </Block>
+      <Block>
+        <H>pickup</H>
+        <p>
+          <Code>label:</Code> is short text on the sprite. If the key is
+          missing, the sprite shows <Code>?</Code>.
         </p>
         <p>
-          <Code>name:</Code> is a string. <Code>str</Code> makes a name. If
-          the name is missing, the game makes an id.
+          <Code>color:</Code> is a color string such as{" "}
+          <Code>"#aa46c8"</Code>. If the key is missing, the pickup
+          uses the default purple.
         </p>
-        <p>
-          <Code>variant:</Code> is only for an enemy. The value is{" "}
-          <Code>"grunt"</Code> or <Code>"bruiser"</Code>.
-          If the variant is missing, the enemy is a grunt.
-        </p>
-        <p>
-          A spawned door is unlocked and closed. A spawned pickup has no
-          custom text or color. A spawned pad has no destination.
-        </p>
-        <p>Examples:</p>
+      </Block>
+      <Block>
+        <H>Examples</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>
-              (spawn type: "enemy" at: "stash" name:
+              (spawn type: "enemy" at: "stash" id:
               "warden" variant: "bruiser")
             </Code>
           </li>
           <li>
             <Code>
-              (spawn type: "enemy" x: 11.5 y: 6.5 name: (str
+              (spawn type: "enemy" x: 11.5 y: 6.5 id: (str
               "enemy-" n))
             </Code>
           </li>
           <li>
             <Code>
-              (spawn type: "ammo" x: 8.5 y: 10.5 name:
-              "pack-a")
+              (spawn type: "door" at: "gate" id:
+              "door-cell" locked: true)
             </Code>
           </li>
           <li>
             <Code>
-              (spawn type: "door" x: 9.5 y: 3.5 name:
-              "door-cell")
+              (spawn type: "teleport" x: 8.5 y: 10.5 dest:
+              "stash")
+            </Code>
+          </li>
+          <li>
+            <Code>
+              (spawn type: "pickup" at: "loot" id:
+              "key-red" label: "K" color:
+              "#c43c3c")
             </Code>
           </li>
         </ul>

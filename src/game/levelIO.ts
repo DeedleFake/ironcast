@@ -10,65 +10,230 @@ import type {
 import {
   DEFAULT_CEIL,
   DEFAULT_FLOOR,
+  DEFAULT_FOG,
+  DEFAULT_PICKUP,
   LEVEL_VERSION,
   MAP_MAX,
   MAP_MIN,
   cloneLevel,
   colorGrid,
+  defaultWallColor,
+  emptyGrid,
+  ensureKeys,
+  levelIssues,
   parseHexColor,
+  readPublicId,
   seedWallColors,
+  withKey,
 } from "./types";
 
 export type ParseResult =
-  | { ok: true; level: GameLevel }
+  | { ok: true; level: GameLevel; errors: string[] }
   | { ok: false; error: string };
 
 function isNum(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v);
 }
 
-function validateWalls(
-  walls: unknown,
-  width: number,
-  height: number,
-): walls is WallGrid {
-  if (!Array.isArray(walls) || walls.length !== height) return false;
-  for (const row of walls) {
-    if (!Array.isArray(row) || row.length !== width) return false;
-    for (const cell of row) {
-      if (!isNum(cell) || cell < 0 || cell > 6 || !Number.isInteger(cell)) {
-        return false;
-      }
-    }
+function inferSize(raw: unknown): { width: number; height: number } | null {
+  if (Array.isArray(raw) && raw.length) {
+    const first = raw[0];
+    if (typeof first === "string") return { height: raw.length, width: first.length };
+    if (Array.isArray(first)) return { height: raw.length, width: first.length };
   }
-  return true;
+  return null;
 }
 
-function validateColors(
-  grid: unknown,
+function coerceWalls(raw: unknown, width: number, height: number): {
+  walls: WallGrid;
+  damaged: boolean;
+} {
+  const walls = emptyGrid(width, height, 0);
+  if (typeof raw === "string") {
+    let damaged = raw.length !== width * height;
+    for (let i = 0; i < raw.length && i < width * height; i++) {
+      const n = raw.charCodeAt(i) - 48;
+      if (n < 0 || n > 6) {
+        damaged = true;
+        continue;
+      }
+      walls[(i / width) | 0]![i % width] = n;
+    }
+    return { walls, damaged };
+  }
+  if (Array.isArray(raw) && typeof raw[0] === "string") {
+    let damaged = raw.length !== height;
+    for (let y = 0; y < height; y++) {
+      const row = raw[y];
+      if (typeof row !== "string") {
+        damaged = true;
+        continue;
+      }
+      if (row.length !== width) damaged = true;
+      for (let x = 0; x < width && x < row.length; x++) {
+        const n = row.charCodeAt(x) - 48;
+        if (n < 0 || n > 6) {
+          damaged = true;
+          continue;
+        }
+        walls[y]![x] = n;
+      }
+    }
+    return { walls, damaged };
+  }
+  let damaged = !Array.isArray(raw);
+  const rows = Array.isArray(raw) ? raw : [];
+  for (let y = 0; y < height; y++) {
+    const row = rows[y];
+    if (!Array.isArray(row)) {
+      if (y < rows.length) damaged = true;
+      continue;
+    }
+    if (row.length !== width) damaged = true;
+    for (let x = 0; x < width; x++) {
+      const cell = row[x];
+      if (!isNum(cell) || cell < 0 || cell > 6 || !Number.isInteger(cell)) {
+        if (x < row.length) damaged = true;
+        continue;
+      }
+      walls[y]![x] = cell;
+    }
+  }
+  if (rows.length !== height) damaged = true;
+  return { walls, damaged };
+}
+
+function coerceColors(
+  raw: unknown,
   width: number,
   height: number,
-): grid is ColorGrid {
-  if (!Array.isArray(grid) || grid.length !== height) return false;
-  for (const row of grid) {
-    if (!Array.isArray(row) || row.length !== width) return false;
+  fill: number,
+): ColorGrid | null {
+  if (!Array.isArray(raw) || raw.length !== height) return null;
+  if (!Array.isArray(raw[0]) || (raw[0] as unknown[]).length !== width) return null;
+  if (typeof (raw[0] as unknown[])[0] !== "number") return null;
+  const out: ColorGrid = [];
+  for (const row of raw) {
+    if (!Array.isArray(row) || row.length !== width) return null;
+    const next: number[] = [];
     for (const cell of row) {
       if (!isNum(cell) || cell < 0 || cell > 0xffffff || !Number.isInteger(cell)) {
-        return false;
+        return null;
       }
+      next.push(cell);
+    }
+    out.push(next);
+  }
+  return out;
+}
+
+function applyColorHits(
+  base: ColorGrid,
+  raw: unknown,
+  width: number,
+  height: number,
+): ColorGrid {
+  if (!Array.isArray(raw)) return base;
+  for (const item of raw) {
+    if (!Array.isArray(item) || item.length < 3) continue;
+    const [x, y, c] = item;
+    if (!isNum(x) || !isNum(y) || !isNum(c)) continue;
+    const ix = x | 0;
+    const iy = y | 0;
+    if (iy < 0 || ix < 0 || iy >= height || ix >= width) continue;
+    if (c < 0 || c > 0xffffff || !Number.isInteger(c)) continue;
+    base[iy]![ix] = c;
+  }
+  return base;
+}
+
+function coerceColorField(
+  raw: unknown,
+  width: number,
+  height: number,
+  fill: number,
+): ColorGrid {
+  const full = coerceColors(raw, width, height, fill);
+  if (full) return full;
+  return applyColorHits(colorGrid(width, height, fill), raw, width, height);
+}
+
+function coerceWallColors(
+  raw: unknown,
+  walls: WallGrid,
+  width: number,
+  height: number,
+): ColorGrid {
+  const full = coerceColors(raw, width, height, 0);
+  if (full) return full;
+  return applyColorHits(seedWallColors(walls), raw, width, height);
+}
+
+function packWalls(walls: WallGrid): string {
+  return walls.map((row) => row.join("")).join("");
+}
+
+function packWallColors(walls: WallGrid, colors: ColorGrid): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  for (let y = 0; y < walls.length; y++) {
+    const row = walls[y]!;
+    for (let x = 0; x < row.length; x++) {
+      const tex = row[x] ?? 0;
+      if (tex <= 0) continue;
+      const c = colors[y]?.[x] ?? 0;
+      if (!c || c === defaultWallColor(tex)) continue;
+      out.push([x, y, c]);
     }
   }
-  return true;
+  return out;
 }
 
-function validateSpawn(s: unknown): s is PlayerSpawn {
-  if (!s || typeof s !== "object") return false;
+function packColorHits(grid: ColorGrid | undefined, fill: number): [number, number, number][] {
+  const out: [number, number, number][] = [];
+  if (!grid) return out;
+  for (let y = 0; y < grid.length; y++) {
+    const row = grid[y]!;
+    for (let x = 0; x < row.length; x++) {
+      const c = row[x] ?? fill;
+      if (c !== fill) out.push([x, y, c]);
+    }
+  }
+  return out;
+}
+
+function packCoord(n: number): number {
+  const cell = Math.floor(n);
+  return n === cell + 0.5 ? cell : n;
+}
+
+function unpackCoord(n: number): number {
+  return Number.isInteger(n) ? n + 0.5 : n;
+}
+
+function packAngle(a: number): number | undefined {
+  const tau = Math.PI * 2;
+  let n = ((a % tau) + tau) % tau;
+  if (n < 1e-9 || tau - n < 1e-9) return undefined;
+  const q = Math.round(n / (Math.PI / 2));
+  if (Math.abs(n - q * (Math.PI / 2)) < 1e-6) {
+    n = ((q % 4) + 4) % 4 * (Math.PI / 2);
+    if (n < 1e-9) return undefined;
+  }
+  return n;
+}
+
+function coerceSpawn(s: unknown): PlayerSpawn {
+  if (!s || typeof s !== "object") return { x: 1.5, y: 1.5, angle: 0 };
   const o = s as Record<string, unknown>;
-  return isNum(o.x) && isNum(o.y) && isNum(o.angle);
+  return {
+    x: isNum(o.x) ? unpackCoord(o.x) : 1.5,
+    y: isNum(o.y) ? unpackCoord(o.y) : 1.5,
+    angle: isNum(o.angle) ? o.angle : 0,
+  };
 }
 
-function validateEntity(e: unknown): e is LevelEntity {
-  if (!e || typeof e !== "object") return false;
+function coerceEntity(e: unknown): LevelEntity | null {
+  if (!e || typeof e !== "object") return null;
   const o = e as Record<string, unknown>;
   const types = [
     "enemy",
@@ -79,53 +244,62 @@ function validateEntity(e: unknown): e is LevelEntity {
     "teleport",
     "pickup",
   ];
-  if (
-    typeof o.id !== "string" ||
-    typeof o.type !== "string" ||
-    !types.includes(o.type) ||
-    !isNum(o.x) ||
-    !isNum(o.y)
-  ) {
-    return false;
+  if (typeof o.type !== "string" || !types.includes(o.type) || !isNum(o.x) || !isNum(o.y)) {
+    return null;
   }
-  if (o.name !== undefined && typeof o.name !== "string") return false;
-  if (o.dest !== undefined && typeof o.dest !== "string") return false;
-  if (o.label !== undefined && typeof o.label !== "string") return false;
-  if (o.color !== undefined && typeof o.color !== "number") return false;
-  if (o.variant !== undefined && o.variant !== "grunt" && o.variant !== "bruiser") {
-    return false;
-  }
-  if (o.locked !== undefined && typeof o.locked !== "boolean") return false;
-  return true;
+  const ent: LevelEntity = withKey({
+    type: o.type as LevelEntity["type"],
+    x: unpackCoord(o.x),
+    y: unpackCoord(o.y),
+    id: readPublicId(o.id, o.name),
+    dest: typeof o.dest === "string" ? o.dest : undefined,
+    label: typeof o.label === "string" ? o.label : undefined,
+    color: isNum(o.color) ? o.color : undefined,
+    variant: o.variant === "bruiser" ? "bruiser" : o.variant === "grunt" ? "grunt" : undefined,
+    locked: typeof o.locked === "boolean" ? o.locked : undefined,
+  });
+  return ent;
 }
 
-function validateZones(v: unknown): v is LevelZone[] {
-  if (v === undefined) return true;
-  if (!Array.isArray(v)) return false;
-  return v.every((z) => {
-    if (!z || typeof z !== "object") return false;
+function coerceZones(v: unknown): LevelZone[] {
+  if (!Array.isArray(v)) return [];
+  const out: LevelZone[] = [];
+  for (const z of v) {
+    if (!z || typeof z !== "object") continue;
     const o = z as Record<string, unknown>;
-    return (
-      typeof o.name === "string" &&
-      isNum(o.x) &&
-      isNum(o.y) &&
-      isNum(o.w) &&
-      isNum(o.h)
+    if (!isNum(o.x) || !isNum(o.y) || !isNum(o.w) || !isNum(o.h)) continue;
+    out.push(
+      withKey({
+        id: readPublicId(o.id, o.name),
+        x: o.x,
+        y: o.y,
+        w: o.w,
+        h: o.h,
+      }),
     );
-  });
+  }
+  return out;
 }
 
-function validateMarks(v: unknown): v is LevelMark[] {
-  if (v === undefined) return true;
-  if (!Array.isArray(v)) return false;
-  return v.every((m) => {
-    if (!m || typeof m !== "object") return false;
+function coerceMarks(v: unknown): LevelMark[] {
+  if (!Array.isArray(v)) return [];
+  const out: LevelMark[] = [];
+  for (const m of v) {
+    if (!m || typeof m !== "object") continue;
     const o = m as Record<string, unknown>;
-    return typeof o.name === "string" && isNum(o.x) && isNum(o.y);
-  });
+    if (!isNum(o.x) || !isNum(o.y)) continue;
+    out.push(
+      withKey({
+        id: readPublicId(o.id, o.name),
+        x: o.x,
+        y: o.y,
+      }),
+    );
+  }
+  return out;
 }
 
-/** Parse and validate a level JSON string or object. */
+/** Parse a level. Only invalid JSON fails. Other problems are errors on a loaded map. */
 export function parseLevel(input: string | unknown): ParseResult {
   let data: unknown;
   try {
@@ -133,84 +307,144 @@ export function parseLevel(input: string | unknown): ParseResult {
   } catch {
     return { ok: false, error: "That isn’t a valid map" };
   }
-  if (!data || typeof data !== "object") {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
     return { ok: false, error: "That isn’t a valid map" };
   }
   const o = data as Record<string, unknown>;
+  const errors: string[] = [];
   if (o.version !== LEVEL_VERSION) {
-    return {
-      ok: false,
-      error: "This map is from a different version",
-    };
+    errors.push("This map is from a different version");
   }
-  if (typeof o.name !== "string" || !o.name.trim()) {
-    return { ok: false, error: "This map has no name" };
+  const name =
+    typeof o.name === "string" && o.name.trim()
+      ? o.name.trim().slice(0, 64)
+      : "";
+  if (!name) errors.push("This map has no title");
+  const inferred = inferSize(o.walls);
+  let width = isNum(o.width) ? o.width | 0 : inferred?.width ?? 0;
+  let height = isNum(o.height) ? o.height | 0 : inferred?.height ?? 0;
+  if (!width || !height) {
+    errors.push("This map is missing its size");
+    width = width || 16;
+    height = height || 16;
   }
-  if (!isNum(o.width) || !isNum(o.height)) {
-    return { ok: false, error: "This map is missing its size" };
+  if (width < MAP_MIN) {
+    errors.push("Width is below the minimum");
+    width = MAP_MIN;
   }
-  const width = o.width | 0;
-  const height = o.height | 0;
-  if (width < MAP_MIN || height < MAP_MIN || width > MAP_MAX || height > MAP_MAX) {
-    return { ok: false, error: "Maps must be between 5×5 and 64×64" };
+  if (height < MAP_MIN) {
+    errors.push("Height is below the minimum");
+    height = MAP_MIN;
   }
-  if (!validateWalls(o.walls, width, height)) {
-    return { ok: false, error: "This map’s layout is damaged" };
+  if (width > MAP_MAX) {
+    errors.push("Width is above the maximum");
+    width = MAP_MAX;
   }
-  if (!validateSpawn(o.spawn)) {
-    return { ok: false, error: "This map has no valid start point" };
+  if (height > MAP_MAX) {
+    errors.push("Height is above the maximum");
+    height = MAP_MAX;
   }
-  if (!Array.isArray(o.entities) || !o.entities.every(validateEntity)) {
-    return { ok: false, error: "This map’s objects are damaged" };
-  }
-  if (!validateZones(o.zones)) {
-    return { ok: false, error: "This map’s zones are damaged" };
-  }
-  if (!validateMarks(o.marks)) {
-    return { ok: false, error: "This map’s marks are damaged" };
-  }
+  const { walls, damaged } = coerceWalls(o.walls, width, height);
+  if (damaged) errors.push("This map’s layout was repaired");
   const seedFloor =
     typeof o.floorColor === "string" ? parseHexColor(o.floorColor) : DEFAULT_FLOOR;
   const seedCeil =
     typeof o.ceilingColor === "string"
       ? parseHexColor(o.ceilingColor)
       : DEFAULT_CEIL;
-  const floors = validateColors(o.floors, width, height)
-    ? (o.floors as ColorGrid).map((r) => [...r])
-    : colorGrid(width, height, seedFloor);
-  const ceils = validateColors(o.ceils, width, height)
-    ? (o.ceils as ColorGrid).map((r) => [...r])
-    : colorGrid(width, height, seedCeil);
-  const walls = (o.walls as WallGrid).map((r) => [...r]);
-  const wallColors = validateColors(o.wallColors, width, height)
-    ? (o.wallColors as ColorGrid).map((r) => [...r])
-    : seedWallColors(walls);
-  const level: GameLevel = {
+  const floors = coerceColorField(o.floors, width, height, seedFloor);
+  const ceils = coerceColorField(o.ceils, width, height, seedCeil);
+  const wallColors = coerceWallColors(o.wallColors, walls, width, height);
+  const entities: LevelEntity[] = [];
+  if (Array.isArray(o.entities)) {
+    for (const e of o.entities) {
+      const ent = coerceEntity(e);
+      if (ent) entities.push(ent);
+      else errors.push("A damaged object was skipped");
+    }
+  }
+  const spawn = coerceSpawn(o.spawn);
+  if (!o.spawn) errors.push("This map had no start point");
+  const level: GameLevel = ensureKeys({
     version: LEVEL_VERSION,
-    name: o.name.trim().slice(0, 64),
+    name: name || "Untitled",
     width,
     height,
     walls,
     floors,
     ceils,
     wallColors,
-    spawn: {
-      x: (o.spawn as PlayerSpawn).x,
-      y: (o.spawn as PlayerSpawn).y,
-      angle: (o.spawn as PlayerSpawn).angle,
-    },
-    entities: (o.entities as LevelEntity[]).map((e) => ({ ...e })),
-    fogColor: typeof o.fogColor === "string" ? o.fogColor : "#0a0a0c",
+    spawn,
+    entities,
+    fogColor: typeof o.fogColor === "string" ? o.fogColor : DEFAULT_FOG,
     author: typeof o.author === "string" ? o.author.slice(0, 64) : "",
     script: typeof o.script === "string" ? o.script : "",
-    zones: Array.isArray(o.zones) ? (o.zones as LevelZone[]).map((z) => ({ ...z })) : [],
-    marks: Array.isArray(o.marks) ? (o.marks as LevelMark[]).map((m) => ({ ...m })) : [],
+    zones: coerceZones(o.zones),
+    marks: coerceMarks(o.marks),
+  });
+  errors.push(...levelIssues(level).filter((e) => !errors.includes(e)));
+  return { ok: true, level, errors };
+}
+
+export function toSavedLevel(level: GameLevel): Record<string, unknown> {
+  const src = cloneLevel(level);
+  const stripEnt = (e: LevelEntity) => {
+    const out: Record<string, unknown> = {
+      type: e.type,
+      x: packCoord(e.x),
+      y: packCoord(e.y),
+    };
+    if (e.id?.trim()) out.id = e.id.trim();
+    if (e.dest) out.dest = e.dest;
+    if (e.label && e.label !== "?") out.label = e.label;
+    if (e.color !== undefined && e.color !== DEFAULT_PICKUP) out.color = e.color;
+    if (e.variant === "bruiser") out.variant = "bruiser";
+    if (e.locked) out.locked = true;
+    return out;
   };
-  return { ok: true, level };
+  const stripZone = (z: LevelZone) => {
+    const out: Record<string, unknown> = { x: z.x, y: z.y, w: z.w, h: z.h };
+    if (z.id?.trim()) out.id = z.id.trim();
+    return out;
+  };
+  const stripMark = (m: LevelMark) => {
+    const out: Record<string, unknown> = { x: m.x, y: m.y };
+    if (m.id?.trim()) out.id = m.id.trim();
+    return out;
+  };
+  const spawn: Record<string, unknown> = {
+    x: packCoord(src.spawn.x),
+    y: packCoord(src.spawn.y),
+  };
+  const angle = packAngle(src.spawn.angle);
+  if (angle !== undefined) spawn.angle = angle;
+  const out: Record<string, unknown> = {
+    version: src.version,
+    name: src.name,
+    width: src.width,
+    height: src.height,
+    walls: packWalls(src.walls),
+    spawn,
+  };
+  const floorHits = packColorHits(src.floors, DEFAULT_FLOOR);
+  if (floorHits.length) out.floors = floorHits;
+  const ceilHits = packColorHits(src.ceils, DEFAULT_CEIL);
+  if (ceilHits.length) out.ceils = ceilHits;
+  const wallTints = packWallColors(src.walls, src.wallColors);
+  if (wallTints.length) out.wallColors = wallTints;
+  if (src.entities.length) out.entities = src.entities.map(stripEnt);
+  if (src.fogColor && src.fogColor !== DEFAULT_FOG) out.fogColor = src.fogColor;
+  if (src.author) out.author = src.author;
+  if (src.script) out.script = src.script;
+  const zones = (src.zones ?? []).map(stripZone);
+  if (zones.length) out.zones = zones;
+  const marks = (src.marks ?? []).map(stripMark);
+  if (marks.length) out.marks = marks;
+  return out;
 }
 
 export function serializeLevel(level: GameLevel, pretty = false): string {
-  const payload = cloneLevel(level);
+  const payload = toSavedLevel(level);
   return pretty ? JSON.stringify(payload, null, 2) : JSON.stringify(payload);
 }
 
