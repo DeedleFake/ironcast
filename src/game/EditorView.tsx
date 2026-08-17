@@ -772,12 +772,19 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     }
     groundEmpties.push({ x, y });
   }
-  const floorCells =
-    can.has("floor")
-      ? selEmpties
-      : occupantCount > 0 && occupantsOnEmpty
-        ? groundEmpties
-        : [];
+  const floorSeen = new Set<string>();
+  const floorCells: { x: number; y: number }[] = [];
+  const addFloorCell = (x: number, y: number) => {
+    if ((level.walls[y]?.[x] ?? 0) !== 0) return;
+    const key = `${x},${y}`;
+    if (floorSeen.has(key)) return;
+    floorSeen.add(key);
+    floorCells.push({ x, y });
+  };
+  for (const s of selEmpties) addFloorCell(s.x, s.y);
+  if (occupantsOnEmpty) {
+    for (const g of groundEmpties) addFloorCell(g.x, g.y);
+  }
   const showFloor = floorCells.length > 0;
   const hasThingOpts =
     can.has("name") ||
