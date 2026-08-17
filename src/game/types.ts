@@ -4,6 +4,7 @@ export const LEVEL_VERSION = 1 as const;
 
 export const DEFAULT_FLOOR = 0x2a2420;
 export const DEFAULT_CEIL = 0x12141a;
+export const DEFAULT_PICKUP = 0xaa46c8;
 
 /** Wall cell: 0 = empty floor, 1+ = wall texture index */
 export type WallGrid = number[][];
@@ -33,6 +34,8 @@ export interface LevelEntity {
   dest?: string;
   /** Short text drawn on a pickup sprite */
   label?: string;
+  /** Pickup body color, 0xRRGGBB */
+  color?: number;
   variant?: EnemyVariant;
   locked?: boolean;
 }

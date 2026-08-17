@@ -4,7 +4,7 @@
  */
 
 import type { EnemyVariant, GameLevel, LevelEntity } from "./types";
-import { cloneLevel, uid } from "./types";
+import { cloneLevel, DEFAULT_PICKUP, hexFromColor, uid } from "./types";
 import {
   getTextures,
   labeledPickup,
@@ -41,6 +41,7 @@ export interface LiveEntity {
   name: string;
   dest: string;
   label: string;
+  color: number;
   variant: EnemyVariant;
   locked: boolean;
   open: boolean;
@@ -189,6 +190,7 @@ function liveFromLevel(e: LevelEntity): LiveEntity {
     name: e.name || e.id,
     dest: e.dest || "",
     label: (e.label || "").trim().slice(0, 3),
+    color: e.color ?? DEFAULT_PICKUP,
     variant,
     locked: !!e.locked,
     open: e.type === "door" ? false : true,
@@ -917,7 +919,7 @@ function getSpriteImg(ent: LiveEntity, atlas: TextureAtlas) {
   if (ent.type === "health") return atlas.health;
   if (ent.type === "door") return atlas.door;
   if (ent.type === "teleport") return atlas.teleport;
-  if (ent.type === "pickup") return labeledPickup(ent.label);
+  if (ent.type === "pickup") return labeledPickup(ent.label, ent.color);
   return atlas.exit;
 }
 
@@ -1376,7 +1378,7 @@ export function renderMinimap(
     else if (e.type === "health") ctx.fillStyle = "#40c060";
     else if (e.type === "door") ctx.fillStyle = e.open ? "#6b4a3a" : "#c08040";
     else if (e.type === "teleport") ctx.fillStyle = "#4080e0";
-    else if (e.type === "pickup") ctx.fillStyle = "#d060c0";
+    else if (e.type === "pickup") ctx.fillStyle = hexFromColor(e.color);
     else ctx.fillStyle = "#40e0a0";
     ctx.beginPath();
     ctx.arc(e.x * cell, e.y * cell, cell * 0.35, 0, Math.PI * 2);

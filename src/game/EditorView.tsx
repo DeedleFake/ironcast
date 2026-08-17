@@ -9,6 +9,7 @@ import type {
 import {
   DEFAULT_CEIL,
   DEFAULT_FLOOR,
+  DEFAULT_PICKUP,
   WALL_NAMES,
   WALL_TEXTURE_COUNT,
   cloneLevel,
@@ -221,7 +222,15 @@ function pruneSel(level: GameLevel, sel: SelItem[]): SelItem[] {
   });
 }
 
-type SelOpt = "texture" | "floor" | "variant" | "name" | "dest" | "turn" | "label";
+type SelOpt =
+  | "texture"
+  | "floor"
+  | "variant"
+  | "name"
+  | "dest"
+  | "turn"
+  | "label"
+  | "color";
 
 function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
   if (s.k === "cell") {
@@ -235,7 +244,7 @@ function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
     if (!e) return new Set();
     if (e.type === "enemy") return new Set<SelOpt>(["variant", "name"]);
     if (e.type === "teleport") return new Set<SelOpt>(["name", "dest"]);
-    if (e.type === "pickup") return new Set<SelOpt>(["name", "label"]);
+    if (e.type === "pickup") return new Set<SelOpt>(["name", "label", "color"]);
     return new Set<SelOpt>(["name"]);
   }
   if (s.k === "mark" || s.k === "zone") return new Set<SelOpt>(["name"]);
@@ -299,6 +308,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [thingName, setThingName] = useState("");
   const [thingDest, setThingDest] = useState("");
   const [thingLabel, setThingLabel] = useState("?");
+  const [thingColor, setThingColor] = useState(DEFAULT_PICKUP);
   const [variant, setVariant] = useState<EnemyVariant>("grunt");
   const [emptyFloor, setEmptyFloor] = useState(DEFAULT_FLOOR);
   const [emptyCeil, setEmptyCeil] = useState(DEFAULT_CEIL);
@@ -324,6 +334,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   destRef.current = thingDest;
   const labelRef = useRef(thingLabel);
   labelRef.current = thingLabel;
+  const colorRef = useRef(thingColor);
+  colorRef.current = thingColor;
   const variantRef = useRef(variant);
   variantRef.current = variant;
   const floorRef = useRef(emptyFloor);
@@ -519,6 +531,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         name: nameRef.current,
         dest: destRef.current,
         label: labelRef.current,
+        color: colorRef.current,
         variant: variantRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
@@ -537,6 +550,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         name: nameRef.current,
         dest: destRef.current,
         label: labelRef.current,
+        color: colorRef.current,
         variant: variantRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
@@ -563,6 +577,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       setThingName(ent.name || "");
       setThingDest(ent.dest || "");
       setThingLabel(ent.label || "?");
+      setThingColor(ent.color ?? DEFAULT_PICKUP);
       setVariant(ent.variant === "bruiser" ? "bruiser" : "grunt");
       setStatus(`Picked ${ent.name || ent.type}`);
       return;
@@ -714,7 +729,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     can.has("texture") ||
     can.has("variant") ||
     can.has("turn") ||
-    can.has("label");
+    can.has("label") ||
+    can.has("color");
   const floorTitle = occupantCount > 0 ? "Ground" : "Empty";
   const hasSpawn = liveSel.some((s) => s.k === "spawn");
   const singleEnt = liveSel.length === 1 && liveSel[0]!.k === "entity" ? selEnts[0] : null;
@@ -1094,6 +1110,30 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     />
                   </label>
                 ) : null}
+                {can.has("color") ? (
+                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                    Color
+                    <input
+                      type="color"
+                      value={hexFromColor(
+                        selEnts.find((e) => e.type === "pickup")?.color ??
+                          DEFAULT_PICKUP,
+                      )}
+                      onChange={(e) => {
+                        const n = parseHexColor(e.target.value);
+                        const ids = new Set(
+                          selEnts.filter((x) => x.type === "pickup").map((x) => x.id),
+                        );
+                        editSel((L) => {
+                          for (const ent of L.entities) {
+                            if (ids.has(ent.id)) ent.color = n;
+                          }
+                        });
+                      }}
+                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                    />
+                  </label>
+                ) : null}
                 {can.has("texture") ? (
                   <div className="grid gap-0.5">
                     {Array.from({ length: WALL_TEXTURE_COUNT }, (_, i) => {
@@ -1344,16 +1384,29 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   </label>
                 ) : null}
                 {brush.kind === "thing" && brush.thing === "pickup" ? (
-                  <label className="block text-[11px] text-muted">
-                    Text
-                    <input
-                      value={thingLabel}
-                      maxLength={3}
-                      onChange={(e) => setThingLabel(e.target.value.slice(0, 3))}
-                      placeholder="?"
-                      className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
-                    />
-                  </label>
+                  <>
+                    <label className="block text-[11px] text-muted">
+                      Text
+                      <input
+                        value={thingLabel}
+                        maxLength={3}
+                        onChange={(e) => setThingLabel(e.target.value.slice(0, 3))}
+                        placeholder="?"
+                        className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                      Color
+                      <input
+                        type="color"
+                        value={hexFromColor(thingColor)}
+                        onChange={(e) =>
+                          setThingColor(parseHexColor(e.target.value))
+                        }
+                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                      />
+                    </label>
+                  </>
                 ) : null}
                 {isZoneBrush(brush) ? (
                   <p className="text-[10px] leading-snug text-dim">
@@ -1548,6 +1601,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 name: nameRef.current,
                 dest: destRef.current,
                 label: labelRef.current,
+                color: colorRef.current,
                 variant: variantRef.current,
                 floor: floorRef.current,
                 ceil: ceilRef.current,
@@ -1600,7 +1654,14 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     )}
                     {ent && (
                       <>
-                        <span className="absolute inset-0 flex items-center justify-center text-[11px] text-fg">
+                        <span
+                          className="absolute inset-0 flex items-center justify-center text-[11px] text-fg"
+                          style={
+                            ent.type === "pickup"
+                              ? { color: hexFromColor(ent.color ?? DEFAULT_PICKUP) }
+                              : undefined
+                          }
+                        >
                           {ent.type === "enemy" && "☠"}
                           {ent.type === "ammo" && "▣"}
                           {ent.type === "health" && "+"}
@@ -1888,6 +1949,7 @@ function applyBrushTo(
     name: string;
     dest: string;
     label: string;
+    color: number;
     variant: EnemyVariant;
     floor: number;
     ceil: number;
@@ -1895,6 +1957,7 @@ function applyBrushTo(
     name: "",
     dest: "",
     label: "?",
+    color: DEFAULT_PICKUP,
     variant: "grunt",
     floor: DEFAULT_FLOOR,
     ceil: DEFAULT_CEIL,
@@ -1953,6 +2016,7 @@ function applyBrushTo(
       brush.thing === "pickup"
         ? (extra.label.trim() || "?").slice(0, 3)
         : undefined,
+    color: brush.thing === "pickup" ? extra.color : undefined,
     variant: brush.thing === "enemy" ? extra.variant : undefined,
     locked: brush.thing === "door" ? false : undefined,
   });
@@ -2086,6 +2150,7 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
       e.name ?? "",
       e.dest ?? "",
       e.label ?? "",
+      e.color ?? "",
       e.variant ?? "",
       e.locked ? 1 : 0,
     ].join(":");

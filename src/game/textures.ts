@@ -266,7 +266,12 @@ function makeCrystal(r: number, g: number, b: number): ImageData {
   return img;
 }
 
-function stampGlyph(d: Uint8ClampedArray, glyph: string) {
+function stampGlyph(
+  d: Uint8ClampedArray,
+  glyph: string,
+  fill = "#fff8e8",
+  stroke = "#1a1410",
+) {
   if (typeof document === "undefined") return;
   const c = document.createElement("canvas");
   c.width = TEX_SIZE;
@@ -276,7 +281,11 @@ function stampGlyph(d: Uint8ClampedArray, glyph: string) {
   ctx.font = "700 16px ui-monospace, SFMono-Regular, Menlo, monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#fff8e8";
+  ctx.lineJoin = "round";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = stroke;
+  ctx.strokeText(glyph.slice(0, 3), 32, 33);
+  ctx.fillStyle = fill;
   ctx.fillText(glyph.slice(0, 3), 32, 33);
   const src = ctx.getImageData(0, 0, TEX_SIZE, TEX_SIZE).data;
   for (let i = 0; i < src.length; i += 4) {
@@ -291,13 +300,25 @@ function stampGlyph(d: Uint8ClampedArray, glyph: string) {
 
 const pickupCache = new Map<string, ImageData>();
 
-export function labeledPickup(label: string): ImageData {
+export function labeledPickup(label: string, color = 0xaa46c8): ImageData {
   const text = (label.trim() || "?").slice(0, 3);
-  const hit = pickupCache.get(text);
+  const packed = color & 0xffffff;
+  const key = `${text}:${packed.toString(16)}`;
+  const hit = pickupCache.get(key);
   if (hit) return hit;
-  const img = makeCrystal(170, 70, 200);
-  stampGlyph(img.data, text);
-  pickupCache.set(text, img);
+  const r = (packed >> 16) & 255;
+  const g = (packed >> 8) & 255;
+  const b = packed & 255;
+  const img = makeCrystal(r, g, b);
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const light = luma > 0.55;
+  stampGlyph(
+    img.data,
+    text,
+    light ? "#1a1410" : "#fff8e8",
+    light ? "#f4efe6" : "#1a1410",
+  );
+  pickupCache.set(key, img);
   return img;
 }
 

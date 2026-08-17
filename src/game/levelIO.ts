@@ -88,6 +88,7 @@ function validateEntity(e: unknown): e is LevelEntity {
   if (o.name !== undefined && typeof o.name !== "string") return false;
   if (o.dest !== undefined && typeof o.dest !== "string") return false;
   if (o.label !== undefined && typeof o.label !== "string") return false;
+  if (o.color !== undefined && typeof o.color !== "number") return false;
   if (o.variant !== undefined && o.variant !== "grunt" && o.variant !== "bruiser") {
     return false;
   }
