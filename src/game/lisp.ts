@@ -29,7 +29,6 @@ export type Token = { kind: TokenKind; text: string };
 export const KEYWORDS = new Set([
   "def",
   "fn",
-  "lambda",
   "let",
   "if",
   "when",
@@ -92,7 +91,6 @@ export const BUILTINS = new Set([
   "teleport",
   "win",
   "lose",
-  "name",
   "true",
   "false",
   "nil",
@@ -264,10 +262,7 @@ function read(p: { s: string; i: number }): LispVal {
     return list(xs);
   }
   if (c === ")") throw new LispError("unexpected )");
-  if (c === "'") {
-    p.i++;
-    return list([sym("quote"), read(p)]);
-  }
+  if (c === "'") throw new LispError("unexpected '");
   if (c === '"') {
     p.i++;
     let out = "";
@@ -313,7 +308,6 @@ const BODY_SPECIALS = new Set([
   "on",
   "def",
   "fn",
-  "lambda",
   "let",
   "if",
   "when",
@@ -325,10 +319,6 @@ const BODY_SPECIALS = new Set([
 function formatVal(v: LispVal, indent: number): string {
   if (v.k !== "list") return formatAtom(v);
   if (v.v.length === 0) return "()";
-  if (v.v[0]?.k === "sym" && v.v[0].v === "quote" && v.v.length === 2) {
-    return "'" + formatVal(v.v[1]!, indent);
-  }
-
   const headName = v.v[0]?.k === "sym" ? v.v[0].v : "";
   const inline = formatInline(v);
   const col = indent * 2;
@@ -351,7 +341,19 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
   const head = v.v[0]!;
   const headName = head.k === "sym" ? head.v : formatVal(head, indent);
 
-  if (headName === "on" || headName === "after") {
+  if (headName === "on") {
+    const ev = v.v[1] ? formatVal(v.v[1], indent) : "";
+    const params = v.v[2] ? formatInline(v.v[2]) : "()";
+    const rest = v.v.slice(3);
+    if (rest.length === 0) return `(on ${ev} ${params})`;
+    const lines = [`(on ${ev} ${params}`];
+    for (const item of rest) {
+      lines.push(body + formatVal(item, indent + 1));
+    }
+    return closeOn(lines);
+  }
+
+  if (headName === "after") {
     let i = 1;
     let header = `(${headName}`;
     while (i < v.v.length && v.v[i]!.k !== "list") {
@@ -375,7 +377,7 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     return closeOn(lines);
   }
 
-  if (headName === "def" || headName === "fn" || headName === "lambda") {
+  if (headName === "def" || headName === "fn") {
     const sig = v.v[1] ? " " + formatInline(v.v[1]) : "";
     const rest = v.v.slice(2);
     if (rest.length === 0) return `(${headName}${sig})`;
@@ -438,9 +440,6 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
 
 function formatInline(v: LispVal): string {
   if (v.k !== "list") return formatAtom(v);
-  if (v.v[0]?.k === "sym" && v.v[0].v === "quote" && v.v.length === 2) {
-    return "'" + formatInline(v.v[1]!);
-  }
   return `(${v.v.map(formatInline).join(" ")})`;
 }
 
@@ -487,7 +486,7 @@ export type Host = {
 
 export type Handler = {
   event: string;
-  filter: string | null;
+  params: string[];
   body: LispVal[];
 };
 
@@ -507,21 +506,20 @@ export function compileProgram(src: string): { ok: true; program: Program } | { 
     if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "on") {
       const ev = form.v[1];
       if (!ev || ev.k !== "sym") {
-        return { ok: false, error: "(on event ...) needs an event name" };
+        return { ok: false, error: "(on event (args...) body) needs an event name" };
       }
-      let filter: string | null = null;
-      let bodyStart = 2;
-      const maybe = form.v[2];
-      if (
-        maybe &&
-        (maybe.k === "sym" || maybe.k === "str") &&
-        form.v.length > 3
-      ) {
-        filter = maybe.k === "sym" ? maybe.v : maybe.v;
-        if (filter === "any" || filter === "*") filter = null;
-        bodyStart = 3;
+      const paramsForm = form.v[2];
+      if (!paramsForm || paramsForm.k !== "list") {
+        return { ok: false, error: "(on event (args...) body) needs a parameter list" };
       }
-      handlers.push({ event: ev.v, filter, body: form.v.slice(bodyStart) });
+      const params: string[] = [];
+      for (const p of paramsForm.v) {
+        if (p.k !== "sym") {
+          return { ok: false, error: "on parameters must be names" };
+        }
+        params.push(p.v);
+      }
+      handlers.push({ event: ev.v, params, body: form.v.slice(3) });
     } else {
       boot.push(form);
     }
@@ -537,7 +535,7 @@ export function lookup(env: Env, name: string): LispVal {
   let cur: Env | null = env;
   while (cur) {
     const v = cur.vars.get(name);
-    if (v) return v;
+    if (cur.vars.has(name)) return cur.vars.get(name)!;
     cur = cur.parent;
   }
   throw new LispError(`unknown name: ${name}`);
@@ -565,18 +563,17 @@ function evalVal(v: LispVal, env: Env, ctx: Ctx): LispVal {
     if (v.v === "true") return bool(true);
     if (v.v === "false") return bool(false);
     if (v.v === "nil") return nil();
-    try {
-      return lookup(env, v.v);
-    } catch {
-      // Bare symbols are names (door-armory, key-red)
-      return v;
-    }
+    return lookup(env, v.v);
   }
   if (v.k !== "list" || v.v.length === 0) return v;
   const head = v.v[0]!;
   if (head.k === "sym") {
     const sf = special(head.v, v.v.slice(1), env, ctx);
     if (sf !== undefined) return sf;
+    if (BUILTINS.has(head.v) && head.v !== "true" && head.v !== "false" && head.v !== "nil") {
+      const args = v.v.slice(1).map((a) => evalVal(a, env, ctx));
+      return callBuiltin(head.v, args, ctx);
+    }
   }
   const fn = evalVal(head, env, ctx);
   const args = v.v.slice(1).map((a) => evalVal(a, env, ctx));
@@ -638,7 +635,6 @@ function special(
     case "def":
       return evalDef(args, env, ctx);
     case "fn":
-    case "lambda":
       return makeFn(args, env);
     case "let":
       return evalLet(args, env, ctx);
@@ -766,8 +762,7 @@ function callBuiltin(name: string, args: LispVal[], ctx: Ctx): LispVal {
       return bool(asNum(args[0]!, name) >= asNum(args[1] ?? num(0), name));
     case "str":
       return str(args.map(printVal).join(""));
-    case "len":
-    case "length": {
+    case "len": {
       const a = args[0];
       if (a?.k === "str") return num(a.v.length);
       if (a?.k === "list") return num(a.v.length);
@@ -875,8 +870,6 @@ function callBuiltin(name: string, args: LispVal[], ctx: Ctx): LispVal {
     case "lose":
       h.lose();
       return nil();
-    case "name":
-      return str(asName(args[0] ?? nil()));
     default:
       throw new LispError(`unknown function: ${name}`);
   }
@@ -903,16 +896,14 @@ export function fireHandlers(
   env: Env,
   host: Host,
   event: string,
-  name: string | null,
-  extras: Record<string, LispVal> = {},
+  args: LispVal[],
 ) {
-  const payloadEnv = makeEnv(env);
-  payloadEnv.vars.set("event", str(event));
-  if (name) payloadEnv.vars.set("who", str(name));
-  for (const [k, v] of Object.entries(extras)) payloadEnv.vars.set(k, v);
   for (const h of program.handlers) {
     if (h.event !== event) continue;
-    if (h.filter && h.filter !== name) continue;
+    const payloadEnv = makeEnv(env);
+    h.params.forEach((p, i) => {
+      payloadEnv.vars.set(p, args[i] ?? nil());
+    });
     try {
       evalForms(h.body, payloadEnv, host);
     } catch (e) {

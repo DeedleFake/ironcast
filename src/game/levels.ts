@@ -259,55 +259,59 @@ export function createNightVaultLevel(): GameLevel {
   const script = `(def (announce msg)
   (say (str ">> " msg)))
 
-(on start
-  (lock door-cell)
-  (lock door-vault)
-  (lock door-exit)
-  (set hits 0)
+(on start ()
+  (lock "door-cell")
+  (lock "door-vault")
+  (lock "door-exit")
+  (set "hits" 0)
   (announce "Cage locked. Shoot the fuse on the east wall."))
 
-(on shoot panel
-  (unless (get freed)
-    (set-wall panel 0)
-    (unlock door-cell)
-    (open door-cell)
-    (set freed true)
-    (announce "Cage fried. Card is in the south locker.")))
+(on shoot (who)
+  (unless (get "freed")
+    (when (= who "panel")
+      (set-wall who 0)
+      (unlock "door-cell")
+      (open "door-cell")
+      (set "freed" true)
+      (announce "Cage fried. Card is in the south locker."))))
 
-(on pickup key-card
-  (unlock door-vault)
-  (announce "Vault lock dropped. Alarm!")
-  (unless (get sprung)
-    (set sprung true)
-    (spawn enemy 11.5 6.5 warden bruiser)))
+(on pickup (who)
+  (when (= who "key-card")
+    (unlock "door-vault")
+    (announce "Vault lock dropped. Alarm!")
+    (unless (get "sprung")
+      (set "sprung" true)
+      (spawn "enemy" 11.5 6.5 "warden" "bruiser"))))
 
-(on enter ambush
-  (unless (get add)
-    (set add true)
-    (spawn enemy 9.5 6.5 runner grunt)
-    (announce "Movement in the hall!")))
+(on enter (zone)
+  (when (= zone "ambush")
+    (unless (get "add")
+      (set "add" true)
+      (spawn "enemy" 9.5 6.5 "runner" "grunt")
+      (announce "Movement in the hall!")))
+  (when (= zone "pad-in")
+    (if (has "key-card")
+      (unless (get "hopped")
+        (set "hopped" true)
+        (teleport "player" "stash")
+        (announce "Sump pipe. Pad home is on the floor."))
+      (say "The grate needs a card."))))
 
-(on die warden
-  (after 1
-    (unlock door-exit)
-    (open door-exit)
-    (give ammo 20)
-    (announce "Exit bolt released.")))
+(on die (who)
+  (when (= who "warden")
+    (after 1
+      (unlock "door-exit")
+      (open "door-exit")
+      (give "ammo" 20)
+      (announce "Exit bolt released."))))
 
-(on enter pad-in
-  (if (has key-card)
-    (unless (get hopped)
-      (set hopped true)
-      (teleport player stash)
-      (announce "Sump pipe. Pad home is on the floor."))
-    (say "The grate needs a card.")))
-
-(on hurt player
-  (set hits (+ (get hits) 1))
-  (if (>= (get hits) 3)
-    (unless (get warned)
-      (set warned true)
-      (announce "You are leaking. Find a pack."))))
+(on hurt (who)
+  (when (= who "player")
+    (set "hits" (+ (get "hits") 1))
+    (if (>= (get "hits") 3)
+      (unless (get "warned")
+        (set "warned" true)
+        (announce "You are leaking. Find a pack.")))))
 `;
 
   return {

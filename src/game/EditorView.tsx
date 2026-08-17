@@ -322,6 +322,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [sizeW, setSizeW] = useState(level.width);
   const [sizeH, setSizeH] = useState(level.height);
   const [scriptOpen, setScriptOpen] = useState(false);
+  const [scriptH, setScriptH] = useState(224);
   const [helpOpen, setHelpOpen] = useState(false);
   const [cellSize, setCellSize] = useState(22);
   const [status, setStatus] = useState("");
@@ -359,6 +360,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const futureRef = useRef<GameLevel[]>([]);
   const strokeBaseRef = useRef<GameLevel | null>(null);
   const dragRef = useRef<Drag | null>(null);
+  const scriptDragRef = useRef<{ y: number; h: number } | null>(null);
 
   const syncHist = () => {
     setCanUndo(pastRef.current.length > 0);
@@ -944,52 +946,6 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   );
                 })}
               </div>
-              {(level.zones ?? []).length > 0 ? (
-                <div className="space-y-0.5">
-                  {(level.zones ?? []).map((z, i) => (
-                    <button
-                      key={`${z.name}-${i}`}
-                      type="button"
-                      onClick={() => {
-                        const next = cloneLevel(level);
-                        next.zones = (next.zones ?? []).filter((_, j) => j !== i);
-                        commitEdit(next);
-                      }}
-                      className="flex w-full items-center justify-between rounded px-1 py-0.5 font-mono text-[10px] text-dim hover:bg-surface hover:text-primary"
-                      title="Remove zone"
-                    >
-                      <span>{z.name}</span>
-                      <span>
-                        {z.w}×{z.h}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-              {(level.marks ?? []).length > 0 ? (
-                <div className="space-y-0.5">
-                  {(level.marks ?? []).map((m) => (
-                    <button
-                      key={`${m.name}-${m.x}-${m.y}`}
-                      type="button"
-                      onClick={() => {
-                        const next = cloneLevel(level);
-                        next.marks = (next.marks ?? []).filter(
-                          (x) => !(x.x === m.x && x.y === m.y),
-                        );
-                        commitEdit(next);
-                      }}
-                      className="flex w-full items-center justify-between rounded px-1 py-0.5 font-mono text-[10px] text-dim hover:bg-surface hover:text-primary"
-                      title="Remove mark"
-                    >
-                      <span>{m.name}</span>
-                      <span>
-                        {m.x},{m.y}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
             </Section>
 
             <Section title="Walls">
@@ -1624,7 +1580,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 return;
               }
               if (t === "fill") return;
-              applyCells([{ x, y }], t === "erase");
+              if (t === "erase") return;
+              applyCells([{ x, y }], false);
             }}
             onPointerUp={(e) => {
               const t = toolRef.current;
@@ -1873,31 +1830,55 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       </div>
 
       {scriptOpen ? (
-        <div className="flex h-56 shrink-0 flex-col border-t border-border bg-surface p-2">
-          <ScriptEditor
-            value={level.script ?? ""}
-            onChange={(src) => setLevel((l) => ({ ...l, script: src }))}
-            error={
-              (level.script ?? "").trim()
-                ? (() => {
-                    const r = compileProgram(level.script ?? "");
-                    return r.ok ? "" : r.error;
-                  })()
-                : ""
-            }
-          />
+        <div
+          className="flex shrink-0 flex-col border-t border-border bg-surface"
+          style={{ height: scriptH }}
+        >
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize script editor"
+            className="flex h-3 shrink-0 cursor-row-resize items-center justify-center hover:bg-surface-2"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              scriptDragRef.current = { y: e.clientY, h: scriptH };
+              (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+            }}
+            onPointerMove={(e) => {
+              const d = scriptDragRef.current;
+              if (!d) return;
+              const max = Math.floor(window.innerHeight * 0.7);
+              const next = Math.max(140, Math.min(max, d.h + (d.y - e.clientY)));
+              setScriptH(next);
+            }}
+            onPointerUp={() => {
+              scriptDragRef.current = null;
+            }}
+            onPointerCancel={() => {
+              scriptDragRef.current = null;
+            }}
+          >
+            <span className="h-1 w-10 rounded-full bg-border" />
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col px-2 pb-2">
+            <ScriptEditor
+              value={level.script ?? ""}
+              onChange={(src) => setLevel((l) => ({ ...l, script: src }))}
+              error={
+                (level.script ?? "").trim()
+                  ? (() => {
+                      const r = compileProgram(level.script ?? "");
+                      return r.ok ? "" : r.error;
+                    })()
+                  : ""
+              }
+            />
+          </div>
         </div>
       ) : null}
 
       {helpOpen ? (
-        <ScriptHelp
-          onClose={() => setHelpOpen(false)}
-          onInsert={(src) => {
-            setLevel((l) => ({ ...l, script: src }));
-            setScriptOpen(true);
-            setHelpOpen(false);
-          }}
-        />
+        <ScriptHelp onClose={() => setHelpOpen(false)} />
       ) : null}
 
       <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-surface px-3 py-1.5 text-[11px] text-muted">
@@ -2084,12 +2065,7 @@ function applyBrushTo(
 ) {
   if (x < 0 || y < 0 || x >= level.width || y >= level.height) return;
   if (erase) {
-    level.walls[y]![x] = 0;
-    removeEntityAt(level, x, y);
-    level.marks = (level.marks ?? []).filter((m) => !(m.x === x && m.y === y));
-    level.zones = (level.zones ?? []).filter(
-      (z) => !(x >= z.x && y >= z.y && x < z.x + z.w && y < z.y + z.h),
-    );
+    eraseOnce(level, x, y);
     return;
   }
   if (brush.kind === "none") return;
@@ -2141,6 +2117,39 @@ function applyBrushTo(
     variant: brush.thing === "enemy" ? extra.variant : undefined,
     locked: brush.thing === "door" ? false : undefined,
   });
+}
+
+function eraseOnce(level: GameLevel, x: number, y: number) {
+  const wall = level.walls[y]![x] ?? 0;
+  const hasEnt = level.entities.some(
+    (e) => Math.floor(e.x) === x && Math.floor(e.y) === y,
+  );
+  if (wall > 0 || hasEnt) {
+    level.walls[y]![x] = 0;
+    removeEntityAt(level, x, y);
+    return;
+  }
+  const mark = (level.marks ?? []).find((m) => m.x === x && m.y === y);
+  if (mark) {
+    level.marks = (level.marks ?? []).filter((m) => !(m.x === x && m.y === y));
+    return;
+  }
+  const zones = level.zones ?? [];
+  let hit = -1;
+  let area = Infinity;
+  for (let i = 0; i < zones.length; i++) {
+    const z = zones[i]!;
+    if (x >= z.x && y >= z.y && x < z.x + z.w && y < z.y + z.h) {
+      const a = z.w * z.h;
+      if (a <= area) {
+        area = a;
+        hit = i;
+      }
+    }
+  }
+  if (hit >= 0) {
+    level.zones = zones.filter((_, i) => i !== hit);
+  }
 }
 
 function removeEntityAt(level: GameLevel, x: number, y: number) {
