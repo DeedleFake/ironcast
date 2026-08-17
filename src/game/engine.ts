@@ -1145,20 +1145,48 @@ export function renderGame(
     }
   }
 
-  const sprites: { ent: LiveEntity; dist: number }[] = [];
+  const sprites: {
+    x: number;
+    y: number;
+    img: ImageData;
+    flash: boolean;
+    dist: number;
+  }[] = [];
   for (const e of state.entities) {
     if (!e.alive) continue;
-    if (e.type === "door" && !e.open) continue;
     if (e.type === "teleport") continue;
+    if (e.type === "door") {
+      if (!e.open) continue;
+      const bx = Math.floor(e.x);
+      const by = Math.floor(e.y);
+      for (const [ox, oy] of [
+        [0.1, 0.1],
+        [0.9, 0.1],
+        [0.1, 0.9],
+        [0.9, 0.9],
+      ] as const) {
+        const x = bx + ox;
+        const y = by + oy;
+        const dist = (x - state.px) * (x - state.px) + (y - state.py) * (y - state.py);
+        sprites.push({ x, y, img: atlas.door, flash: false, dist });
+      }
+      continue;
+    }
     const dist =
       (e.x - state.px) * (e.x - state.px) + (e.y - state.py) * (e.y - state.py);
-    sprites.push({ ent: e, dist });
+    sprites.push({
+      x: e.x,
+      y: e.y,
+      img: getSpriteImg(e, atlas),
+      flash: e.hurtFlash > 0,
+      dist,
+    });
   }
   sprites.sort((a, b) => b.dist - a.dist);
 
-  for (const { ent } of sprites) {
-    const spriteX = ent.x - state.px;
-    const spriteY = ent.y - state.py;
+  for (const spr of sprites) {
+    const spriteX = spr.x - state.px;
+    const spriteY = spr.y - state.py;
     const invDet =
       1 / (state.planeX * state.dirY - state.dirX * state.planeY);
     const transformX =
@@ -1177,9 +1205,9 @@ export function renderGame(
     const drawStartX = Math.floor(-spriteW / 2 + spriteScreenX + shakeX);
     const drawEndX = Math.floor(spriteW / 2 + spriteScreenX + shakeX);
 
-    const img = getSpriteImg(ent, atlas);
+    const img = spr.img;
     const shade = Math.min(1, 1.1 / (1 + transformY * 0.2));
-    const flash = ent.hurtFlash > 0;
+    const flash = spr.flash;
 
     for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
       if (stripe < 0 || stripe >= width) continue;

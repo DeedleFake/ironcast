@@ -404,63 +404,37 @@ function makeDoorClosed(locked: boolean): ImageData {
   return img;
 }
 
-function makeDoorOpen(): ImageData {
+function makeDoorPillar(): ImageData {
   const img = new ImageData(TEX_SIZE, TEX_SIZE);
   const d = img.data;
   for (let i = 0; i < d.length; i += 4) d[i + 3] = 0;
-
-  const leaf = (x: number, y: number) => {
-    const n = noise(x, y, 11);
-    const edge = x <= 17 || x >= 42 || y <= 5 || y >= 58;
-    const bar = y === 18 || y === 19 || y === 44 || y === 45;
-    let r = 52 + n * 10;
-    let g = 58 + n * 10;
-    let b = 66 + n * 12;
-    if (edge) {
-      r = 24;
-      g = 26;
-      b = 30;
-    } else if (bar) {
-      r = 78;
-      g = 82;
-      b = 90;
-    }
-    if (x >= 34 && x <= 40 && y >= 30 && y <= 36) {
-      r = 180;
-      g = 150;
-      b = 70;
-    }
-    if (x >= 20 && x <= 28 && y >= 16 && y <= 22) {
-      r = 70;
-      g = 55;
-      b = 28;
-    }
-    setPx(d, x, y, r, g, b, 255);
-  };
-
-  // jamb
-  for (let y = 2; y < 62; y++) {
-    for (let x = 6; x <= 12; x++) {
-      const n = noise(x, y, 7);
-      const lip = x === 6 || x === 12;
-      setPx(
-        d,
-        x,
-        y,
-        lip ? 18 : 32 + n * 8,
-        lip ? 18 : 34 + n * 8,
-        lip ? 20 : 38 + n * 8,
-        255,
-      );
+  const left = 27;
+  const right = 36;
+  for (let y = 0; y < TEX_SIZE; y++) {
+    for (let x = left; x <= right; x++) {
+      const n = noise(x, y, 12);
+      const edge = x === left || x === right;
+      const band = y === 14 || y === 15 || y === 48 || y === 49;
+      let r = 56 + n * 10;
+      let g = 62 + n * 10;
+      let b = 70 + n * 12;
+      if (edge) {
+        r = 22;
+        g = 24;
+        b = 28;
+      } else if (band) {
+        r = 170;
+        g = 140;
+        b = 70;
+      }
+      if ((y === 8 || y === 32 || y === 55) && (x === 29 || x === 34)) {
+        r = 150;
+        g = 150;
+        b = 140;
+      }
+      setPx(d, x, y, r, g, b, 255);
     }
   }
-  // door leaf pushed aside
-  for (let y = 4; y < 60; y++) {
-    for (let x = 16; x <= 43; x++) leaf(x, y);
-  }
-  // hinge shadows
-  for (let y = 10; y < 14; y++) setPx(d, 14, y, 90, 90, 80, 255);
-  for (let y = 48; y < 52; y++) setPx(d, 14, y, 90, 90, 80, 255);
   return img;
 }
 
@@ -516,7 +490,7 @@ export function getTextures(): TextureAtlas {
     ammo: makePickup(200, 160, 40, "A"),
     health: makePickup(40, 180, 80, "+"),
     exit: makeExit(),
-    door: makeDoorOpen(),
+    door: makeDoorPillar(),
     doorClosed: makeDoorClosed(false),
     doorLocked: makeDoorClosed(true),
     teleport: makePickup(80, 140, 220, "T"),
