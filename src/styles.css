@@ -34,6 +34,7 @@
   body,
   #root {
     height: 100%;
+    color-scheme: dark;
   }
 
   body {
@@ -53,6 +54,17 @@
   button:disabled {
     cursor: not-allowed;
     opacity: 0.5;
+  }
+
+  input[type="number"].spin-none {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  input[type="number"].spin-none::-webkit-inner-spin-button,
+  input[type="number"].spin-none::-webkit-outer-spin-button {
+    appearance: none;
+    margin: 0;
   }
 }
 

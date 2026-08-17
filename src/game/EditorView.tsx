@@ -54,6 +54,8 @@ import {
   Zap,
   DoorOpen,
   BookOpen,
+  ChevronDown,
+  ChevronUp,
   Spline,
 } from "lucide-react";
 
@@ -841,35 +843,25 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
           className="min-w-0 w-36 rounded-md border border-border bg-surface-2 px-2 py-1.5 font-display text-sm font-semibold tracking-wide text-fg uppercase outline-none focus:border-primary sm:w-48"
           aria-label="Level name"
         />
-        <div className="flex items-center gap-1">
-          <input
-            type="number"
+        <div className="flex items-center gap-1.5">
+          <SizeField
+            value={sizeW}
             min={MAP_MIN}
             max={MAP_MAX}
-            value={Number.isFinite(sizeW) ? sizeW : ""}
-            onChange={(e) => onSizeW(Number(e.target.value))}
-            onBlur={() => applySize()}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-            className="w-14 rounded-md border border-border bg-surface-2 px-1.5 py-1.5 text-center font-mono text-sm text-fg outline-none focus:border-primary"
-            aria-label="Map width"
+            ariaLabel="Map width"
             title={`Width (${MAP_MIN}–${MAP_MAX})`}
+            onChange={onSizeW}
+            onCommit={() => applySize()}
           />
           <span className="text-sm text-muted">×</span>
-          <input
-            type="number"
+          <SizeField
+            value={sizeH}
             min={MAP_MIN}
             max={MAP_MAX}
-            value={Number.isFinite(sizeH) ? sizeH : ""}
-            onChange={(e) => onSizeH(Number(e.target.value))}
-            onBlur={() => applySize()}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-            }}
-            className="w-14 rounded-md border border-border bg-surface-2 px-1.5 py-1.5 text-center font-mono text-sm text-fg outline-none focus:border-primary"
-            aria-label="Map height"
+            ariaLabel="Map height"
             title={`Height (${MAP_MIN}–${MAP_MAX})`}
+            onChange={onSizeH}
+            onCommit={() => applySize()}
           />
         </div>
         <div className="flex items-center gap-0.5">
@@ -1993,6 +1985,67 @@ function ToolCell({
       {tool.icon}
       <span className="leading-none">{tool.label}</span>
     </button>
+  );
+}
+
+function SizeField({
+  value,
+  min,
+  max,
+  ariaLabel,
+  title,
+  onChange,
+  onCommit,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  ariaLabel: string;
+  title: string;
+  onChange: (n: number) => void;
+  onCommit: () => void;
+}) {
+  const bump = (dir: 1 | -1) => {
+    const cur = Number.isFinite(value) ? value : min;
+    onChange(Math.max(min, Math.min(max, (cur | 0) + dir)));
+  };
+  return (
+    <div className="flex overflow-hidden rounded-md border border-border bg-surface-2 focus-within:border-primary">
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={Number.isFinite(value) ? value : ""}
+        onChange={(e) => onChange(Number(e.target.value))}
+        onBlur={onCommit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        className="spin-none w-10 bg-transparent px-1.5 py-1.5 text-center font-mono text-sm text-fg outline-none"
+        aria-label={ariaLabel}
+        title={title}
+      />
+      <div className="flex w-5 flex-col border-l border-border">
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={`Increase ${ariaLabel.toLowerCase()}`}
+          onClick={() => bump(1)}
+          className="flex flex-1 items-center justify-center text-muted hover:bg-surface hover:text-fg"
+        >
+          <ChevronUp className="size-3" />
+        </button>
+        <button
+          type="button"
+          tabIndex={-1}
+          aria-label={`Decrease ${ariaLabel.toLowerCase()}`}
+          onClick={() => bump(-1)}
+          className="flex flex-1 items-center justify-center border-t border-border text-muted hover:bg-surface hover:text-fg"
+        >
+          <ChevronDown className="size-3" />
+        </button>
+      </div>
+    </div>
   );
 }
 
