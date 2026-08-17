@@ -325,7 +325,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [wallColor, setWallColor] = useState(() => defaultWallColor(1));
   const [thingName, setThingName] = useState("");
   const [thingDest, setThingDest] = useState("");
-  const [thingLabel, setThingLabel] = useState("?");
+  const [thingLabel, setThingLabel] = useState("");
   const [thingColor, setThingColor] = useState(DEFAULT_PICKUP);
   const [variant, setVariant] = useState<EnemyVariant>("grunt");
   const [thingDisabled, setThingDisabled] = useState(false);
@@ -667,7 +667,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       chooseBrush({ kind: "thing", thing: ent.type });
       setThingName(ent.id || "");
       setThingDest(ent.dest || "");
-      setThingLabel(ent.label || "?");
+      setThingLabel(ent.label || "");
       setThingColor(ent.color ?? DEFAULT_PICKUP);
       setVariant(ent.variant === "bruiser" ? "bruiser" : "grunt");
       setThingDisabled(!!ent.disabled);
@@ -1179,7 +1179,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     Text
                     <input
                       value={
-                        selEnts.find((e) => e.type === "pickup")?.label ?? "?"
+                        selEnts.find((e) => e.type === "pickup")?.label ?? ""
                       }
                       maxLength={3}
                       onChange={(e) => {
@@ -1193,7 +1193,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           }
                         });
                       }}
-                      placeholder="?"
+                      placeholder="none"
                       className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                     />
                   </label>
@@ -1511,7 +1511,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                         value={thingLabel}
                         maxLength={3}
                         onChange={(e) => setThingLabel(e.target.value.slice(0, 3))}
-                        placeholder="?"
+                        placeholder="none"
                         className="mt-0.5 w-full rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-fg outline-none focus:border-primary"
                       />
                     </label>
@@ -1832,7 +1832,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           {ent.type === "exit" && "⎋"}
                           {ent.type === "door" && "▯"}
                           {ent.type === "teleport" && "◎"}
-                          {ent.type === "pickup" && (ent.label || "?")}
+                          {ent.type === "pickup" && (ent.label || "◆")}
                           {ent.type === "button" && "●"}
                         </span>
                         {ent.id ? (
@@ -2281,7 +2281,7 @@ function applyBrushTo(
   } = {
     name: "",
     dest: "",
-    label: "?",
+    label: "",
     color: DEFAULT_PICKUP,
     variant: "grunt",
     disabled: false,
@@ -2354,7 +2354,7 @@ function applyBrushTo(
       dest: brush.thing === "teleport" ? extra.dest.trim() || undefined : undefined,
       label:
         brush.thing === "pickup"
-          ? (extra.label.trim() || "?").slice(0, 3)
+          ? extra.label.trim().slice(0, 3) || undefined
           : undefined,
       color: brush.thing === "pickup" ? extra.color : undefined,
       variant: brush.thing === "enemy" ? extra.variant : undefined,

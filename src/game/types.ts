@@ -136,6 +136,10 @@ export function texFromWallName(name: string): number | null {
   return i >= 0 ? i : null;
 }
 
+export function wallNameFromTex(tex: number): string {
+  return WALL_IDS[tex] ?? "empty";
+}
+
 export const WALL_DEFAULT_COLORS = [
   0,
   0x4a5568,

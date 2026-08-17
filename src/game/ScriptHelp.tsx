@@ -188,9 +188,7 @@ function Intro() {
           handlers for the same event each get 8000 steps.
         </p>
         <p>
-          <Code>after</Code> does not start a new count.{" "}
-          <Code>after</Code> uses the steps that remain from the handler that
-          set the timer.
+          Each <Code>after</Code> body starts a new count of 8000.
         </p>
         <p>
           <Code>(on ...)</Code> is valid only at the top of the file. A nested{" "}
@@ -717,9 +715,9 @@ function Commands() {
           <Code>get-attr</Code> reads one field from a named thing.
         </p>
         <p>
-          <Code>set-attr</Code> uses keys. <Code>id:</Code> is the
-          thing. Each other key is a field to change. The form returns true
-          when that thing exists.
+          <Code>set-attr</Code> uses keys. <Code>id:</Code> is one
+          name or a list of names. Each other key is a field to change.
+          The form returns true when every named thing exists.
         </p>
         <p>
           The fields you can change are <Code>locked:</Code>,{" "}
@@ -734,7 +732,9 @@ function Commands() {
         </p>
         <p>
           <Code>(set-attr id: "door-armory" locked: true)</Code>{" "}
-          locks that door. One call can change more than one field.
+          locks that door. One call can change more than one field.{" "}
+          <Code>(set-attr id: (list "door-a" "door-b") open: true)</Code>{" "}
+          changes every name in the list.
         </p>
         <p>
           <Code>(get-attr "door-armory" "locked")</Code> reads one
@@ -800,10 +800,35 @@ function Commands() {
         </ul>
       </Block>
       <Block>
+        <H>get-wall</H>
+        <p>
+          <Code>get-wall</Code> reads one field from one cell. The
+          call has no keys.
+        </p>
+        <p>
+          <Code>(get-wall "panel" "type")</Code> uses a mark or a
+          named thing.{" "}
+          <Code>(get-wall 5 8 "color")</Code> uses cell
+          coordinates.
+        </p>
+        <p>
+          The field is <Code>"type"</Code>, <Code>"color"</Code>,{" "}
+          <Code>"floor"</Code>, or <Code>"ceiling"</Code>.{" "}
+          <Code>type</Code> is a pattern name such as{" "}
+          <Code>"empty"</Code> or <Code>"rust-metal"</Code>. The
+          color fields are strings such as <Code>"#6b4a3a"</Code>. An
+          empty cell has no wall color, so that field is{" "}
+          <Code>nil</Code>. A missing mark or thing is{" "}
+          <Code>nil</Code>.
+        </p>
+      </Block>
+      <Block>
         <H>remove, teleport, win, lose</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>
-            <Code>(remove "grunt-a")</Code> deletes that thing.
+            <Code>(remove "grunt-a")</Code> deletes that thing.{" "}
+            <Code>(remove (list "a" "b"))</Code> deletes each
+            name in the list.
           </li>
           <li>
             <Code>(teleport "player" "stash")</Code> moves
@@ -836,6 +861,14 @@ function Commands() {
           The picker skips walls. It prefers a cell with no other thing.
         </p>
         <p>
+          <Code>fill: true</Code> with <Code>at:</Code> set to a
+          zone puts one thing on every open cell in that zone. It skips
+          walls, closed doors, and cells that already have a thing. The
+          result is a list of the new names. A mark or a thing with{" "}
+          <Code>fill: true</Code> still makes one thing, in a list of
+          one.
+        </p>
+        <p>
           <Code>x:</Code> and <Code>y:</Code> are map positions. The center
           of a cell is a number that ends in <Code>.5</Code>.
         </p>
@@ -854,7 +887,10 @@ function Commands() {
           <Code>id:</Code> is a string. <Code>str</Code> can build
           one. If you omit <Code>id:</Code>, <Code>spawn</Code> makes
           a name like <Code>enemy-1</Code> and returns it. Store that
-          string if you want to use the new thing later.
+          string if you want to use the new thing later. With{" "}
+          <Code>fill: true</Code>, each thing gets its own name.{" "}
+          <Code>id:</Code> is then a prefix, such as{" "}
+          <Code>wave-1</Code>, <Code>wave-2</Code>.
         </p>
       </Block>
       <Block>
@@ -891,7 +927,7 @@ function Commands() {
         <H>pickup</H>
         <p>
           <Code>label:</Code> is short text on the sprite. If the key is
-          missing, the sprite shows <Code>?</Code>.
+          missing or empty, the sprite has no text.
         </p>
         <p>
           <Code>color:</Code> is a color string such as{" "}
@@ -932,6 +968,11 @@ function Commands() {
             <Code>
               (spawn type: "teleport" x: 8.5 y: 10.5 dest:
               "stash")
+            </Code>
+          </li>
+          <li>
+            <Code>
+              (spawn type: "enemy" at: "ambush" fill: true)
             </Code>
           </li>
           <li>

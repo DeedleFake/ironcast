@@ -4,7 +4,7 @@
  */
 
 import type { EnemyVariant, GameLevel, LevelEntity } from "./types";
-import { cloneLevel, colorGrid, DEFAULT_CEIL, DEFAULT_FLOOR, DEFAULT_PICKUP, defaultWallColor, hexFromColor, seedWallColors, texFromWallName, uid } from "./types";
+import { cloneLevel, colorGrid, DEFAULT_CEIL, DEFAULT_FLOOR, DEFAULT_PICKUP, defaultWallColor, hexFromColor, seedWallColors, texFromWallName, uid, wallNameFromTex } from "./types";
 import {
   getTextures,
   labeledPickup,
@@ -892,7 +892,89 @@ function makeHost(state: GameState): Host {
       }
       return any;
     },
+    getWall: (loc, attr) => {
+      let x: number;
+      let y: number;
+      if ("at" in loc) {
+        const mark = findMark(state, loc.at);
+        const named = findNamed(state, loc.at);
+        if (mark) {
+          x = mark.x;
+          y = mark.y;
+        } else if (named) {
+          x = Math.floor(named.x);
+          y = Math.floor(named.y);
+        } else return undefined;
+      } else {
+        x = Math.floor(loc.x);
+        y = Math.floor(loc.y);
+      }
+      const level = state.level;
+      if (x < 0 || y < 0 || x >= level.width || y >= level.height) {
+        return undefined;
+      }
+      const tex = level.walls[y]?.[x] ?? 0;
+      if (attr === "type") return str(wallNameFromTex(tex));
+      if (attr === "color") {
+        if (tex === 0) return nil();
+        const c = level.wallColors?.[y]?.[x] || defaultWallColor(tex);
+        return str(hexFromColor(c));
+      }
+      if (attr === "floor") {
+        return str(hexFromColor(level.floors?.[y]?.[x] ?? DEFAULT_FLOOR));
+      }
+      if (attr === "ceiling") {
+        return str(hexFromColor(level.ceils?.[y]?.[x] ?? DEFAULT_CEIL));
+      }
+      return nil();
+    },
     spawn: (opts) => {
+      const put = (x: number, y: number) => {
+        const key = uid("k");
+        const publicId = opts.fill
+          ? nextSpawnId(state, opts.id?.trim() || opts.type)
+          : opts.id?.trim() || nextSpawnId(state, opts.type);
+        const ent = liveFromLevel({
+          key,
+          id: publicId,
+          type: opts.type as LevelEntity["type"],
+          x,
+          y,
+          variant: opts.variant === "bruiser" ? "bruiser" : "grunt",
+          dest: opts.dest,
+          label: opts.label,
+          color: opts.color,
+          locked: opts.locked,
+          disabled: opts.disabled,
+        });
+        if (ent.type === "enemy") state.totalEnemies += 1;
+        state.entities.push(ent);
+        return publicId;
+      };
+      if (opts.fill) {
+        if (!opts.at) return null;
+        const zone = findZone(state, opts.at);
+        if (!zone) {
+          const spot = resolveSpot(state, opts.at);
+          if (!spot) return null;
+          return [put(spot.x, spot.y)];
+        }
+        const ids: string[] = [];
+        const x1 = zone.x + zone.w;
+        const y1 = zone.y + zone.h;
+        for (let y = zone.y; y < y1; y++) {
+          for (let x = zone.x; x < x1; x++) {
+            if (x < 0 || y < 0 || x >= state.level.width || y >= state.level.height) {
+              continue;
+            }
+            if ((state.level.walls[y]?.[x] ?? 0) > 0) continue;
+            if (closedDoorAt(state, x, y)) continue;
+            if (cellBusy(state, x, y)) continue;
+            ids.push(put(x + 0.5, y + 0.5));
+          }
+        }
+        return ids;
+      }
       let x = opts.x;
       let y = opts.y;
       if (opts.at) {
@@ -902,24 +984,7 @@ function makeHost(state: GameState): Host {
         y = spot.y;
       }
       if (x === undefined || y === undefined) return null;
-      const key = uid("k");
-      const publicId = opts.id?.trim() || nextSpawnId(state, opts.type);
-      const ent = liveFromLevel({
-        key,
-        id: publicId,
-        type: opts.type as LevelEntity["type"],
-        x,
-        y,
-        variant: opts.variant === "bruiser" ? "bruiser" : "grunt",
-        dest: opts.dest,
-        label: opts.label,
-        color: opts.color,
-        locked: opts.locked,
-        disabled: opts.disabled,
-      });
-      if (ent.type === "enemy") state.totalEnemies += 1;
-      state.entities.push(ent);
-      return publicId;
+      return put(x, y);
     },
     remove: (name) => {
       const e = findNamed(state, name);

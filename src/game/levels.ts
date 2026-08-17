@@ -402,10 +402,112 @@ export function createNightVaultLevel(): GameLevel {
   };
 }
 
+export function createDepthsLevel(): GameLevel {
+  const result = parseLevel({
+    version: LEVEL_VERSION,
+    name: "The Depths",
+    width: 20,
+    height: 23,
+    walls:
+      "0000000100000000000000000001000000000000000000010000000000000000000100000000000011101111000000000000000000010000000000000000000100000000000000000001000000000000000000010000000000000000000100000000000000000001000000000000000000010000000000000000000100000000000000000001000000000000000000010000000000000000000111111111111100000001010000000000000000010100000000000000000101000000000000000001040000000000000000010100000000000000000101000000000000000001010000000000",
+    spawn: { x: 3, y: 1, angle: Math.PI / 2 },
+    floors: [
+      [15, 17, 6505772],
+      [16, 17, 6505772],
+      [17, 17, 6505772],
+      [18, 17, 6505772],
+      [19, 17, 6505772],
+      [15, 18, 6505772],
+      [16, 18, 13478799],
+      [17, 18, 13478799],
+      [18, 18, 13478799],
+      [19, 18, 6505772],
+      [15, 19, 6505772],
+      [16, 19, 13478799],
+      [17, 19, 13478799],
+      [18, 19, 13478799],
+      [19, 19, 6505772],
+      [15, 20, 6505772],
+      [16, 20, 13478799],
+      [17, 20, 13478799],
+      [18, 20, 13478799],
+      [19, 20, 6505772],
+      [15, 21, 6505772],
+      [16, 21, 6505772],
+      [17, 21, 6505772],
+      [18, 21, 6505772],
+      [19, 21, 6505772],
+    ],
+    ceils: [
+      [16, 18, 10076657],
+      [17, 18, 10076657],
+      [18, 18, 10076657],
+      [16, 19, 10076657],
+      [17, 19, 10076657],
+      [18, 19, 10076657],
+      [16, 20, 10076657],
+      [17, 20, 10076657],
+      [18, 20, 10076657],
+    ],
+    entities: [
+      { type: "door", x: 3, y: 4 },
+      { type: "exit", x: 17, y: 19, id: "exit-1" },
+      { type: "button", x: 9, y: 19, id: "activate-server" },
+    ],
+    zones: [
+      { x: 0, y: 13, w: 7, h: 1, id: "zone-2" },
+      { x: 1, y: 17, w: 5, h: 5, id: "zone-1" },
+      { x: 7, y: 16, w: 1, h: 7, id: "zone-3" },
+      { x: 2, y: 20, w: 3, h: 1, id: "guard-spawn-3" },
+      { x: 2, y: 19, w: 3, h: 1, id: "guard-spawn-2" },
+      { x: 2, y: 17, w: 3, h: 1, id: "guard-spawn-1" },
+      { x: 2, y: 21, w: 3, h: 1, id: "guard-spawn" },
+    ],
+    marks: [{ x: 9, y: 19, id: "server" }],
+    script: prettyScript(`(def teleport-guard (0))
+(def teleport-guard (n)
+  (after 0.5
+    (teleport "guard" (str "guard-spawn-" n))
+    (teleport-guard (- n 1))))
+
+(on enter (zone: "zone-2")
+  (if not (get "spawned")
+    (set "spawned" true)
+    (say "You've activated my trap card!")
+    (set-wall at: "zone-1"
+              type: "empty"
+              ceiling: "#3584e4"
+              floor: "#63452c")
+    (spawn type: "enemy"
+           id: "guard"
+           at: "guard-spawn"
+           variant: "bruiser")
+    (teleport-guard 3)))
+
+(on die (enemy:)
+  (say "Aghhhh!!!")
+  (after 3
+    (say "SYSTEM: Emergency override activated."))
+  (after 6
+    (set-wall at: "zone-3" type: "empty")))
+
+(on use (target: "activate-server")
+  (set-attr id: "activate-server" disabled: true)
+  (set-wall at: "server" color: "#ff0000")
+  (after 2
+    (set-wall at: "server" type: "empty")))
+`),
+  });
+  if (!result.ok) throw new Error(result.error);
+  result.level.author = "Built-in";
+  return result.level;
+}
+
 export const BUILTIN_LEVELS: GameLevel[] = [
   createOutpostLevel(),
   createReactorLevel(),
   createNightVaultLevel(),
+  createDepthsLevel(),
 ];
 
 const STORAGE_KEY = "raycast-doom-custom-levels-v1";

@@ -94,6 +94,7 @@ export const BUILTINS = new Set([
   "set-attr",
   "get-attr",
   "set-wall",
+  "get-wall",
   "spawn",
   "remove",
   "teleport",
@@ -144,6 +145,11 @@ export function asNum(v: LispVal, ctx: string): number {
 export function asName(v: LispVal): string {
   if (v.k === "sym" || v.k === "str") return v.v;
   throw new LispError("expected a name");
+}
+
+function asIdList(v: LispVal): string[] {
+  if (v.k === "list") return v.v.map(asName);
+  return [asName(v)];
 }
 
 export function asColor(v: LispVal, ctx: string): number {
@@ -690,6 +696,10 @@ export type Host = {
   setAttr: (id: string, patch: AttrPatch) => boolean;
   getAttr: (id: string, attr: string) => LispVal | undefined;
   setWall: (opts: SetWallOpts) => boolean;
+  getWall: (
+    loc: { at: string } | { x: number; y: number },
+    attr: string,
+  ) => LispVal | undefined;
   spawn: (opts: {
     type: string;
     at?: string;
@@ -702,7 +712,8 @@ export type Host = {
     color?: number;
     locked?: boolean;
     disabled?: boolean;
-  }) => string | null;
+    fill?: boolean;
+  }) => string | string[] | null;
   remove: (name: string) => boolean;
   teleport: (who: string, dest: LispVal, y?: LispVal) => boolean;
   win: () => void;
@@ -1095,11 +1106,12 @@ function special(
     case "after": {
       const sec = asNum(evalVal(args[0] ?? num(0), env, ctx), "after");
       const body = args.slice(1);
+      const later = { budget: BUDGET, host: ctx.host };
       ctx.host.after(sec, () => {
         try {
-          for (const b of body) evalVal(b, env, ctx);
-        } catch {
-          /* swallow timer errors */
+          for (const b of body) evalVal(b, env, later);
+        } catch (e) {
+          ctx.host.say(e instanceof Error ? e.message : "Script error");
         }
       });
       return nil();
@@ -1343,7 +1355,11 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       ) {
         throw new LispError("set-attr needs an attribute");
       }
-      return bool(h.setAttr(asName(id), patch));
+      let ok = true;
+      for (const name of asIdList(id)) {
+        if (!h.setAttr(name, patch)) ok = false;
+      }
+      return bool(ok);
     }
     case "get-attr": {
       if (args.length < 2) throw new LispError("get-attr needs an id and an attr");
@@ -1393,6 +1409,28 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         }),
       );
     }
+    case "get-wall": {
+      if (args.length === 2) {
+        const attr = asName(args[1]!);
+        if (!["type", "color", "floor", "ceiling"].includes(attr)) {
+          throw new LispError(`unknown attr ${attr}`);
+        }
+        return h.getWall({ at: asName(args[0]!) }, attr) ?? nil();
+      }
+      if (args.length === 3) {
+        const attr = asName(args[2]!);
+        if (!["type", "color", "floor", "ceiling"].includes(attr)) {
+          throw new LispError(`unknown attr ${attr}`);
+        }
+        return (
+          h.getWall(
+            { x: asNum(args[0]!, "get-wall"), y: asNum(args[1]!, "get-wall") },
+            attr,
+          ) ?? nil()
+        );
+      }
+      throw new LispError("get-wall needs a mark and an attr, or x y attr");
+    }
     case "spawn": {
       if (call.pos.length) {
         throw new LispError("spawn needs keys");
@@ -1409,6 +1447,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         "color",
         "locked",
         "disabled",
+        "fill",
       ];
       for (const key of call.keys.keys()) {
         if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
@@ -1442,6 +1481,8 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         throw new LispError("disabled: is only for button");
       }
       const publicId = call.keys.get("id");
+      const fill = call.keys.has("fill") && truthy(call.keys.get("fill")!);
+      if (fill && !at) throw new LispError("fill: needs at:");
       const made = h.spawn({
         type: kind,
         at: at ? asName(at) : undefined,
@@ -1454,12 +1495,19 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         color: color ? asColor(color, "color") : undefined,
         locked: locked ? truthy(locked) : undefined,
         disabled: disabled ? truthy(disabled) : undefined,
+        fill,
       });
       if (made === null) throw new LispError("spawn at: not found");
+      if (Array.isArray(made)) return list(made.map(str));
       return str(made);
     }
-    case "remove":
-      return bool(h.remove(asName(args[0] ?? nil())));
+    case "remove": {
+      let ok = true;
+      for (const name of asIdList(args[0] ?? nil())) {
+        if (!h.remove(name)) ok = false;
+      }
+      return bool(ok);
+    }
     case "teleport":
       return bool(
         h.teleport(asName(args[0] ?? sym("player")), args[1] ?? nil(), args[2]),

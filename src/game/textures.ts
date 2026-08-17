@@ -306,7 +306,7 @@ function stampGlyph(
 const pickupCache = new Map<string, ImageData>();
 
 export function labeledPickup(label: string, color = 0xaa46c8): ImageData {
-  const text = (label.trim() || "?").slice(0, 3);
+  const text = label.trim().slice(0, 3);
   const packed = color & 0xffffff;
   const key = `${text}:${packed.toString(16)}`;
   const hit = pickupCache.get(key);
@@ -315,14 +315,16 @@ export function labeledPickup(label: string, color = 0xaa46c8): ImageData {
   const g = (packed >> 8) & 255;
   const b = packed & 255;
   const img = makeCrystal(r, g, b);
-  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  const light = luma > 0.55;
-  stampGlyph(
-    img.data,
-    text,
-    light ? "#1a1410" : "#fff8e8",
-    light ? "#f4efe6" : "#1a1410",
-  );
+  if (text) {
+    const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+    const light = luma > 0.55;
+    stampGlyph(
+      img.data,
+      text,
+      light ? "#1a1410" : "#fff8e8",
+      light ? "#f4efe6" : "#1a1410",
+    );
+  }
   pickupCache.set(key, img);
   return img;
 }
