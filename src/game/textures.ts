@@ -1,5 +1,7 @@
 /** Procedural wall + sprite textures for the raycaster. */
 
+import { defaultWallColor } from "./types";
+
 const TEX_SIZE = 64;
 
 export type TextureAtlas = {
@@ -389,6 +391,7 @@ export function sampleWall(
   u: number,
   v: number,
   shade: number,
+  tint = 0,
 ): [number, number, number] {
   const tex = atlas.walls[Math.max(0, Math.min(atlas.walls.length - 1, texId - 1))];
   if (!tex) return [40, 40, 40];
@@ -397,10 +400,20 @@ export function sampleWall(
   const ty = Math.max(0, Math.min(size - 1, Math.floor(v * size))) | 0;
   const i = (ty * size + tx) * 4;
   const d = tex.data;
+  const tr = d[i] ?? 0;
+  const tg = d[i + 1] ?? 0;
+  const tb = d[i + 2] ?? 0;
+  if (!tint || tint === defaultWallColor(texId)) {
+    return [(tr * shade) | 0, (tg * shade) | 0, (tb * shade) | 0];
+  }
+  const lum = (tr + tg + tb) / (3 * 140);
+  const wr = (tint >> 16) & 255;
+  const wg = (tint >> 8) & 255;
+  const wb = tint & 255;
   return [
-    ((d[i] ?? 0) * shade) | 0,
-    ((d[i + 1] ?? 0) * shade) | 0,
-    ((d[i + 2] ?? 0) * shade) | 0,
+    Math.min(255, wr * lum * shade) | 0,
+    Math.min(255, wg * lum * shade) | 0,
+    Math.min(255, wb * lum * shade) | 0,
   ];
 }
 

@@ -14,6 +14,7 @@ import {
   cloneLevel,
   colorGrid,
   parseHexColor,
+  seedWallColors,
 } from "./types";
 
 export type ParseResult =
@@ -178,14 +179,19 @@ export function parseLevel(input: string | unknown): ParseResult {
   const ceils = validateColors(o.ceils, width, height)
     ? (o.ceils as ColorGrid).map((r) => [...r])
     : colorGrid(width, height, seedCeil);
+  const walls = (o.walls as WallGrid).map((r) => [...r]);
+  const wallColors = validateColors(o.wallColors, width, height)
+    ? (o.wallColors as ColorGrid).map((r) => [...r])
+    : seedWallColors(walls);
   const level: GameLevel = {
     version: LEVEL_VERSION,
     name: o.name.trim().slice(0, 64),
     width,
     height,
-    walls: (o.walls as WallGrid).map((r) => [...r]),
+    walls,
     floors,
     ceils,
+    wallColors,
     spawn: {
       x: (o.spawn as PlayerSpawn).x,
       y: (o.spawn as PlayerSpawn).y,

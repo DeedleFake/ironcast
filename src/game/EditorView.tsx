@@ -10,12 +10,14 @@ import {
   DEFAULT_CEIL,
   DEFAULT_FLOOR,
   DEFAULT_PICKUP,
+  defaultWallColor,
   WALL_NAMES,
   WALL_TEXTURE_COUNT,
   cloneLevel,
   hexFromColor,
   makeEmptyLevel,
   parseHexColor,
+  seedWallColors,
   uid,
 } from "./types";
 import { upsertCustomLevel } from "./levels";
@@ -230,14 +232,15 @@ type SelOpt =
   | "dest"
   | "turn"
   | "label"
-  | "color";
+  | "color"
+  | "wallColor";
 
 function optsForItem(level: GameLevel, s: SelItem): Set<SelOpt> {
   if (s.k === "cell") {
     const wall = level.walls[s.y]?.[s.x] ?? 0;
     return wall === 0
       ? new Set<SelOpt>(["floor"])
-      : new Set<SelOpt>(["texture"]);
+      : new Set<SelOpt>(["texture", "wallColor"]);
   }
   if (s.k === "entity") {
     const e = level.entities.find((x) => x.id === s.id);
@@ -305,6 +308,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [tool, setTool] = useState<EditorTool>("paint");
   const [brush, setBrush] = useState<Brush>({ kind: "wall", tex: 1 });
   const [wallTex, setWallTex] = useState(1);
+  const [wallColor, setWallColor] = useState(() => defaultWallColor(1));
   const [thingName, setThingName] = useState("");
   const [thingDest, setThingDest] = useState("");
   const [thingLabel, setThingLabel] = useState("?");
@@ -340,6 +344,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   variantRef.current = variant;
   const floorRef = useRef(emptyFloor);
   floorRef.current = emptyFloor;
+  const wallColorRef = useRef(wallColor);
+  wallColorRef.current = wallColor;
   const ceilRef = useRef(emptyCeil);
   ceilRef.current = emptyCeil;
   const lastDrawRef = useRef<EditorTool>("paint");
@@ -484,6 +490,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         } else if (n >= 1 && n <= WALL_TEXTURE_COUNT) {
           e.preventDefault();
           setWallTex(n);
+          setWallColor(defaultWallColor(n));
           chooseBrush({ kind: "wall", tex: n });
         }
       }
@@ -535,6 +542,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         variant: variantRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
+        wallColor: wallColorRef.current,
       };
       for (const c of cells) applyBrushTo(next, c.x, c.y, b, erase, extra);
       return next;
@@ -554,6 +562,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
         variant: variantRef.current,
         floor: floorRef.current,
         ceil: ceilRef.current,
+        wallColor: wallColorRef.current,
       };
       for (const c of cells) applyBrushTo(next, c.x, c.y, b, erase, extra);
       commitEdit(next);
@@ -595,6 +604,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       setEmptyCeil(L.ceils[y]?.[x] ?? DEFAULT_CEIL);
     } else {
       setWallTex(tex);
+      setWallColor(L.wallColors?.[y]?.[x] || defaultWallColor(tex));
     }
     chooseBrush({ kind: "wall", tex });
     setStatus(`Picked ${tex === 0 ? "Empty" : (WALL_NAMES[tex] ?? "wall")}`);
@@ -730,7 +740,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     can.has("variant") ||
     can.has("turn") ||
     can.has("label") ||
-    can.has("color");
+    can.has("color") ||
+    can.has("wallColor");
   const floorTitle = occupantCount > 0 ? "Ground" : "Empty";
   const hasSpawn = liveSel.some((s) => s.k === "spawn");
   const singleEnt = liveSel.length === 1 && liveSel[0]!.k === "entity" ? selEnts[0] : null;
@@ -979,7 +990,10 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 </button>
                 <button
                   type="button"
-                  onClick={() => chooseBrush({ kind: "wall", tex: wallTex })}
+                  onClick={() => {
+                    setWallColor(defaultWallColor(wallTex));
+                    chooseBrush({ kind: "wall", tex: wallTex });
+                  }}
                   className={`flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
                     brush.kind === "wall" && brush.tex > 0
                       ? "border-primary bg-primary/15 text-fg"
@@ -988,7 +1002,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 >
                   <span
                     className="size-4 shrink-0 rounded-sm border border-black/40"
-                    style={{ background: TEX_COLORS[wallTex] ?? TEX_COLORS[1] }}
+                    style={{ background: hexFromColor(wallColor) }}
                   />
                   <span className="truncate">Wall</span>
                 </button>
@@ -1134,6 +1148,32 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                     />
                   </label>
                 ) : null}
+                {can.has("wallColor") ? (
+                  <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                    Color
+                    <input
+                      type="color"
+                      value={hexFromColor(
+                        selCells
+                          .map((s) => level.wallColors?.[s.y]?.[s.x] ?? 0)
+                          .find((n) => n > 0) ||
+                          defaultWallColor(1),
+                      )}
+                      onChange={(e) => {
+                        const n = parseHexColor(e.target.value);
+                        editSel((L) => {
+                          if (!L.wallColors) L.wallColors = seedWallColors(L.walls);
+                          for (const s of selCells) {
+                            if ((L.walls[s.y]?.[s.x] ?? 0) > 0) {
+                              L.wallColors[s.y]![s.x] = n;
+                            }
+                          }
+                        });
+                      }}
+                      className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                    />
+                  </label>
+                ) : null}
                 {can.has("texture") ? (
                   <div className="grid gap-0.5">
                     {Array.from({ length: WALL_TEXTURE_COUNT }, (_, i) => {
@@ -1149,9 +1189,13 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           type="button"
                           onClick={() =>
                             editSel((L) => {
+                              if (!L.wallColors) {
+                                L.wallColors = seedWallColors(L.walls);
+                              }
                               for (const s of selCells) {
                                 if ((L.walls[s.y]?.[s.x] ?? 0) > 0) {
                                   L.walls[s.y]![s.x] = tex;
+                                  L.wallColors[s.y]![s.x] = defaultWallColor(tex);
                                 }
                               }
                             })
@@ -1299,7 +1343,19 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                   </>
                 ) : null}
                 {brush.kind === "wall" && brush.tex > 0 ? (
-                  <div className="grid gap-0.5">
+                  <>
+                    <label className="flex items-center justify-between gap-1 text-[11px] text-muted">
+                      Color
+                      <input
+                        type="color"
+                        value={hexFromColor(wallColor)}
+                        onChange={(e) =>
+                          setWallColor(parseHexColor(e.target.value))
+                        }
+                        className="h-6 w-8 cursor-pointer border-0 bg-transparent"
+                      />
+                    </label>
+                    <div className="grid gap-0.5">
                     {Array.from({ length: WALL_TEXTURE_COUNT }, (_, i) => {
                       const tex = i + 1;
                       const active = brush.tex === tex;
@@ -1309,6 +1365,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           type="button"
                           onClick={() => {
                             setWallTex(tex);
+                            setWallColor(defaultWallColor(tex));
                             chooseBrush({ kind: "wall", tex });
                           }}
                           className={`flex items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition-colors ${
@@ -1325,7 +1382,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                         </button>
                       );
                     })}
-                  </div>
+                    </div>
+                  </>
                 ) : null}
                 {brush.kind === "thing" && brush.thing === "spawn" ? (
                   <button
@@ -1605,6 +1663,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 variant: variantRef.current,
                 floor: floorRef.current,
                 ceil: ceilRef.current,
+                wallColor: wallColorRef.current,
               });
               commitEdit(next);
             }}
@@ -1627,7 +1686,10 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                       background:
                         cell === 0
                           ? hexFromColor(level.floors[y]?.[x] ?? DEFAULT_FLOOR)
-                          : (TEX_COLORS[cell] ?? "#333"),
+                          : hexFromColor(
+                              level.wallColors?.[y]?.[x] ||
+                                defaultWallColor(cell),
+                            ),
                     }}
                   >
                     {cell === 0 ? (
@@ -1953,6 +2015,7 @@ function applyBrushTo(
     variant: EnemyVariant;
     floor: number;
     ceil: number;
+    wallColor: number;
   } = {
     name: "",
     dest: "",
@@ -1961,6 +2024,7 @@ function applyBrushTo(
     variant: "grunt",
     floor: DEFAULT_FLOOR,
     ceil: DEFAULT_CEIL,
+    wallColor: defaultWallColor(1),
   },
 ) {
   if (x < 0 || y < 0 || x >= level.width || y >= level.height) return;
@@ -1979,10 +2043,12 @@ function applyBrushTo(
       Math.floor(level.spawn.x) === x && Math.floor(level.spawn.y) === y;
     if (brush.tex > 0 && isSpawn) return;
     level.walls[y]![x] = brush.tex;
+    if (!level.wallColors) level.wallColors = seedWallColors(level.walls);
     if (brush.tex === 0) {
       level.floors[y]![x] = extra.floor;
       level.ceils[y]![x] = extra.ceil;
     } else {
+      level.wallColors[y]![x] = extra.wallColor;
       removeEntityAt(level, x, y);
     }
     return;
@@ -2139,6 +2205,9 @@ function sameMap(a: GameLevel, b: GameLevel): boolean {
       if (ar[x] !== br[x]) return false;
       if ((a.floors[y]?.[x] ?? 0) !== (b.floors[y]?.[x] ?? 0)) return false;
       if ((a.ceils[y]?.[x] ?? 0) !== (b.ceils[y]?.[x] ?? 0)) return false;
+      if ((a.wallColors?.[y]?.[x] ?? 0) !== (b.wallColors?.[y]?.[x] ?? 0)) {
+        return false;
+      }
     }
   }
   const key = (e: LevelEntity) =>

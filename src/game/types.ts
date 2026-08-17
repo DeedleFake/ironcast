@@ -73,6 +73,8 @@ export interface GameLevel {
   floors: ColorGrid;
   /** Ceiling color per empty cell, 0xRRGGBB */
   ceils: ColorGrid;
+  /** Wall tint per cell, 0xRRGGBB. Pattern comes from walls[]. */
+  wallColors: ColorGrid;
   spawn: PlayerSpawn;
   entities: LevelEntity[];
   fogColor: string;
@@ -106,6 +108,31 @@ export const WALL_NAMES = [
   "Stone",
   "Hazard",
 ] as const;
+
+export const WALL_DEFAULT_COLORS = [
+  0,
+  0x4a5568,
+  0x8b3a3a,
+  0x6b4a3a,
+  0x2d6b4a,
+  0x6b6b5a,
+  0xa08a20,
+] as const;
+
+export function defaultWallColor(tex: number): number {
+  return WALL_DEFAULT_COLORS[tex] ?? WALL_DEFAULT_COLORS[1]!;
+}
+
+export function seedWallColors(walls: WallGrid): ColorGrid {
+  const h = walls.length;
+  const w = walls[0]?.length ?? 0;
+  return Array.from({ length: h }, (_, y) =>
+    Array.from({ length: w }, (_, x) => {
+      const tex = walls[y]?.[x] ?? 0;
+      return tex > 0 ? defaultWallColor(tex) : 0;
+    }),
+  );
+}
 
 export function emptyGrid(w: number, h: number, fill = 0): WallGrid {
   return Array.from({ length: h }, () => Array.from({ length: w }, () => fill));
@@ -143,6 +170,9 @@ export function cloneLevel(level: GameLevel): GameLevel {
     ceils: (level.ceils ?? colorGrid(width, height, DEFAULT_CEIL)).map((row) => [
       ...row,
     ]),
+    wallColors: (level.wallColors ?? seedWallColors(level.walls)).map((row) => [
+      ...row,
+    ]),
     spawn: { ...level.spawn },
     entities: level.entities.map((e) => ({ ...e })),
     zones: level.zones?.map((z) => ({ ...z })),
@@ -163,6 +193,7 @@ export function makeEmptyLevel(
     walls: emptyGrid(width, height, 0),
     floors: colorGrid(width, height, DEFAULT_FLOOR),
     ceils: colorGrid(width, height, DEFAULT_CEIL),
+    wallColors: colorGrid(width, height, 0),
     spawn: { x: 1.5, y: 1.5, angle: 0 },
     entities: [],
     fogColor: "#0a0a0c",

@@ -1,5 +1,5 @@
 import type { ColorGrid, GameLevel } from "./types";
-import { LEVEL_VERSION, colorGrid, parseHexColor, uid } from "./types";
+import { LEVEL_VERSION, colorGrid, parseHexColor, seedWallColors, uid } from "./types";
 import { parseLevel } from "./levelIO";
 
 function fillColors(w: number, h: number, hex: string): ColorGrid {
@@ -152,6 +152,7 @@ export function createOutpostLevel(): GameLevel {
       paintRect(g, 18, 8, 26, 14, "#0a0c10");
       return g;
     })(),
+    wallColors: seedWallColors(walls),
     fogColor: "#0c0c10",
     author: "Built-in",
   };
@@ -219,6 +220,7 @@ export function createReactorLevel(): GameLevel {
       paintRect(g, 8, 8, 11, 11, "#180808");
       return g;
     })(),
+    wallColors: seedWallColors(walls),
     fogColor: "#080a0c",
     author: "Built-in",
   };

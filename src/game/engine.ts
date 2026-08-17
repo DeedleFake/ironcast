@@ -4,7 +4,7 @@
  */
 
 import type { EnemyVariant, GameLevel, LevelEntity } from "./types";
-import { cloneLevel, DEFAULT_PICKUP, hexFromColor, uid } from "./types";
+import { cloneLevel, DEFAULT_PICKUP, defaultWallColor, hexFromColor, seedWallColors, uid } from "./types";
 import {
   getTextures,
   labeledPickup,
@@ -719,6 +719,13 @@ function makeHost(state: GameState): Host {
         return false;
       }
       state.level.walls[y]![x] = Math.max(0, Math.min(6, tex | 0));
+      if (!state.level.wallColors) {
+        state.level.wallColors = seedWallColors(state.level.walls);
+      }
+      const nextTex = state.level.walls[y]![x]!;
+      if (nextTex > 0 && !(state.level.wallColors[y]?.[x] ?? 0)) {
+        state.level.wallColors[y]![x] = defaultWallColor(nextTex);
+      }
       return true;
     },
     spawn: (type, x, y, name, variant) => {
@@ -947,6 +954,7 @@ export function renderGame(
   const pix = imgData.data;
   const floors = state.level.floors;
   const ceils = state.level.ceils;
+  const wallColors = state.level.wallColors;
   const mapW = state.level.width;
   const mapH = state.level.height;
   const pads: { x: number; y: number }[] = [];
@@ -1075,7 +1083,14 @@ export function renderGame(
       const texY = Math.floor(((d * atlas.size) / lineHeight) / 256);
       const u = texX / atlas.size;
       const v = texY / atlas.size;
-      const [r, g, b] = sampleWall(atlas, texId, u, v, shade);
+      const [r, g, b] = sampleWall(
+        atlas,
+        texId,
+        u,
+        v,
+        shade,
+        wallColors?.[mapY]?.[mapX] ?? 0,
+      );
       const i = (y * width + colX) * 4;
       pix[i] = r;
       pix[i + 1] = g;
@@ -1356,16 +1371,9 @@ export function renderMinimap(
     for (let x = 0; x < level.width; x++) {
       const c = level.walls[y]![x]!;
       if (c > 0) {
-        const colors = [
-          "",
-          "#4a5568",
-          "#8b3a3a",
-          "#6b4a3a",
-          "#2d6b4a",
-          "#6b6b5a",
-          "#a08a20",
-        ];
-        ctx.fillStyle = colors[c] ?? "#555";
+        ctx.fillStyle = hexFromColor(
+          level.wallColors?.[y]?.[x] || defaultWallColor(c),
+        );
         ctx.fillRect(x * cell, y * cell, cell + 0.5, cell + 0.5);
       }
     }
