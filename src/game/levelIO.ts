@@ -11,6 +11,8 @@ import {
   DEFAULT_CEIL,
   DEFAULT_FLOOR,
   LEVEL_VERSION,
+  MAP_MAX,
+  MAP_MIN,
   cloneLevel,
   colorGrid,
   parseHexColor,
@@ -149,7 +151,7 @@ export function parseLevel(input: string | unknown): ParseResult {
   }
   const width = o.width | 0;
   const height = o.height | 0;
-  if (width < 5 || height < 5 || width > 64 || height > 64) {
+  if (width < MAP_MIN || height < MAP_MIN || width > MAP_MAX || height > MAP_MAX) {
     return { ok: false, error: "Maps must be between 5×5 and 64×64" };
   }
   if (!validateWalls(o.walls, width, height)) {

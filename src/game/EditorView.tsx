@@ -16,7 +16,10 @@ import {
   cloneLevel,
   hexFromColor,
   makeEmptyLevel,
+  MAP_MAX,
+  MAP_MIN,
   parseHexColor,
+  resizeLevel,
   seedWallColors,
   uid,
 } from "./types";
@@ -316,6 +319,8 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [variant, setVariant] = useState<EnemyVariant>("grunt");
   const [emptyFloor, setEmptyFloor] = useState(DEFAULT_FLOOR);
   const [emptyCeil, setEmptyCeil] = useState(DEFAULT_CEIL);
+  const [sizeW, setSizeW] = useState(level.width);
+  const [sizeH, setSizeH] = useState(level.height);
   const [scriptOpen, setScriptOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [cellSize, setCellSize] = useState(22);
@@ -385,6 +390,22 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     syncHist();
     return true;
   }, []);
+
+  const applySize = useCallback(() => {
+    const w = Math.max(MAP_MIN, Math.min(MAP_MAX, sizeW | 0));
+    const h = Math.max(MAP_MIN, Math.min(MAP_MAX, sizeH | 0));
+    setSizeW(w);
+    setSizeH(h);
+    const cur = levelRef.current;
+    if (w === cur.width && h === cur.height) return;
+    commitEdit(resizeLevel(cur, w, h));
+    setStatus(`Map is now ${w}×${h}`);
+  }, [sizeW, sizeH, commitEdit]);
+
+  useEffect(() => {
+    setSizeW(level.width);
+    setSizeH(level.height);
+  }, [level.width, level.height]);
 
   const undo = useCallback(() => {
     if (strokeBaseRef.current) endStroke();
@@ -1721,14 +1742,16 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                           style={
                             ent.type === "pickup"
                               ? { color: hexFromColor(ent.color ?? DEFAULT_PICKUP) }
-                              : undefined
+                              : ent.type === "door"
+                                ? { color: "#c4a050" }
+                                : undefined
                           }
                         >
                           {ent.type === "enemy" && "☠"}
                           {ent.type === "ammo" && "▣"}
                           {ent.type === "health" && "+"}
                           {ent.type === "exit" && "⎋"}
-                          {ent.type === "door" && "▣"}
+                          {ent.type === "door" && "▯"}
                           {ent.type === "teleport" && "◎"}
                           {ent.type === "pickup" && (ent.label || "?")}
                         </span>
@@ -1878,9 +1901,40 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
       ) : null}
 
       <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border bg-surface px-3 py-1.5 text-[11px] text-muted">
-        <span>
-          {level.width}×{level.height} · {level.entities.length} placed ·{" "}
-          {tool === "select"
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <label className="flex items-center gap-1">
+            Size
+            <input
+              type="number"
+              min={MAP_MIN}
+              max={MAP_MAX}
+              value={sizeW}
+              onChange={(e) => setSizeW(Number(e.target.value))}
+              onBlur={applySize}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              className="w-12 rounded border border-border bg-surface-2 px-1 py-0.5 text-center font-mono text-[11px] text-fg outline-none focus:border-primary"
+              aria-label="Map width"
+            />
+            ×
+            <input
+              type="number"
+              min={MAP_MIN}
+              max={MAP_MAX}
+              value={sizeH}
+              onChange={(e) => setSizeH(Number(e.target.value))}
+              onBlur={applySize}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              }}
+              className="w-12 rounded border border-border bg-surface-2 px-1 py-0.5 text-center font-mono text-[11px] text-fg outline-none focus:border-primary"
+              aria-label="Map height"
+            />
+          </label>
+          <span>
+            {level.entities.length} placed ·{" "}
+            {tool === "select"
             ? liveSel.length
               ? `Select · ${liveSel.length} selected · Shift adds`
               : "Select · click or drag a box · Shift adds"
@@ -1889,6 +1943,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
               : brushLabel
                 ? `${toolLabel} · ${brushLabel}`
                 : toolLabel}
+          </span>
         </span>
         <span className="min-w-0 truncate text-accent">{status}</span>
         <span className="hidden sm:inline">Right-click erases · Alt-click picks</span>

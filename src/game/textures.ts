@@ -14,6 +14,8 @@ export type TextureAtlas = {
   health: ImageData;
   exit: ImageData;
   door: ImageData;
+  doorClosed: ImageData;
+  doorLocked: ImageData;
   teleport: ImageData;
   pickup: ImageData;
   weapon: ImageData;
@@ -324,6 +326,144 @@ export function labeledPickup(label: string, color = 0xaa46c8): ImageData {
   return img;
 }
 
+function makeDoorClosed(locked: boolean): ImageData {
+  const img = new ImageData(TEX_SIZE, TEX_SIZE);
+  const d = img.data;
+  for (let y = 0; y < TEX_SIZE; y++) {
+    for (let x = 0; x < TEX_SIZE; x++) {
+      const n = noise(x, y, locked ? 9 : 8);
+      const frame = x < 5 || x > 58 || y < 4 || y > 59;
+      const seam = x >= 30 && x <= 33;
+      const bar = y === 16 || y === 17 || y === 46 || y === 47;
+      let r = 48 + n * 10;
+      let g = 54 + n * 10;
+      let b = 62 + n * 12;
+      if ((Math.floor(x / 8) + Math.floor(y / 10)) % 2 === 0) {
+        r -= 6;
+        g -= 6;
+        b -= 4;
+      }
+      if (seam) {
+        r = 18;
+        g = 20;
+        b = 24;
+      }
+      if (bar) {
+        r = 72 + n * 8;
+        g = 78 + n * 8;
+        b = 86 + n * 8;
+      }
+      if (frame) {
+        r = 22;
+        g = 24;
+        b = 28;
+      }
+      // viewport slit
+      if (x >= 12 && x <= 26 && y >= 18 && y <= 26) {
+        const inner = x > 13 && x < 25 && y > 19 && y < 25;
+        if (inner) {
+          r = locked ? 40 : 90;
+          g = locked ? 12 : 70;
+          b = locked ? 10 : 30;
+        } else {
+          r = 12;
+          g = 12;
+          b = 14;
+        }
+      }
+      // handle
+      if (x >= 42 && x <= 50 && y >= 30 && y <= 36) {
+        r = 180;
+        g = 150;
+        b = 70;
+      }
+      // lock lamp
+      if (x >= 28 && x <= 35 && y >= 7 && y <= 12) {
+        if (locked) {
+          r = 200;
+          g = 40;
+          b = 28;
+        } else {
+          r = 40;
+          g = 190;
+          b = 70;
+        }
+      }
+      // rivets
+      if (
+        ((x === 8 || x === 55) && (y === 8 || y === 32 || y === 55)) ||
+        ((x === 22 || x === 41) && (y === 16 || y === 47))
+      ) {
+        r = 160;
+        g = 160;
+        b = 150;
+      }
+      setPx(d, x, y, r, g, b, 255);
+    }
+  }
+  return img;
+}
+
+function makeDoorOpen(): ImageData {
+  const img = new ImageData(TEX_SIZE, TEX_SIZE);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) d[i + 3] = 0;
+
+  const leaf = (x: number, y: number) => {
+    const n = noise(x, y, 11);
+    const edge = x <= 17 || x >= 42 || y <= 5 || y >= 58;
+    const bar = y === 18 || y === 19 || y === 44 || y === 45;
+    let r = 52 + n * 10;
+    let g = 58 + n * 10;
+    let b = 66 + n * 12;
+    if (edge) {
+      r = 24;
+      g = 26;
+      b = 30;
+    } else if (bar) {
+      r = 78;
+      g = 82;
+      b = 90;
+    }
+    if (x >= 34 && x <= 40 && y >= 30 && y <= 36) {
+      r = 180;
+      g = 150;
+      b = 70;
+    }
+    if (x >= 20 && x <= 28 && y >= 16 && y <= 22) {
+      r = 70;
+      g = 55;
+      b = 28;
+    }
+    setPx(d, x, y, r, g, b, 255);
+  };
+
+  // jamb
+  for (let y = 2; y < 62; y++) {
+    for (let x = 6; x <= 12; x++) {
+      const n = noise(x, y, 7);
+      const lip = x === 6 || x === 12;
+      setPx(
+        d,
+        x,
+        y,
+        lip ? 18 : 32 + n * 8,
+        lip ? 18 : 34 + n * 8,
+        lip ? 20 : 38 + n * 8,
+        255,
+      );
+    }
+  }
+  // door leaf pushed aside
+  for (let y = 4; y < 60; y++) {
+    for (let x = 16; x <= 43; x++) leaf(x, y);
+  }
+  // hinge shadows
+  for (let y = 10; y < 14; y++) setPx(d, 14, y, 90, 90, 80, 255);
+  for (let y = 48; y < 52; y++) setPx(d, 14, y, 90, 90, 80, 255);
+  return img;
+}
+
 function makeExit(): ImageData {
   const img = new ImageData(TEX_SIZE, TEX_SIZE);
   const d = img.data;
@@ -376,7 +516,9 @@ export function getTextures(): TextureAtlas {
     ammo: makePickup(200, 160, 40, "A"),
     health: makePickup(40, 180, 80, "+"),
     exit: makeExit(),
-    door: makePickup(160, 90, 40, "D"),
+    door: makeDoorOpen(),
+    doorClosed: makeDoorClosed(false),
+    doorLocked: makeDoorClosed(true),
     teleport: makePickup(80, 140, 220, "T"),
     pickup: makeCrystal(170, 70, 200),
     weapon: makeWeapon(),
@@ -414,6 +556,24 @@ export function sampleWall(
     Math.min(255, wr * lum * shade) | 0,
     Math.min(255, wg * lum * shade) | 0,
     Math.min(255, wb * lum * shade) | 0,
+  ];
+}
+
+export function sampleDoor(
+  img: ImageData,
+  u: number,
+  v: number,
+  shade: number,
+): [number, number, number] {
+  const size = img.width;
+  const tx = Math.max(0, Math.min(size - 1, Math.floor(u * size))) | 0;
+  const ty = Math.max(0, Math.min(size - 1, Math.floor(v * size))) | 0;
+  const i = (ty * size + tx) * 4;
+  const d = img.data;
+  return [
+    (((d[i] ?? 0) * shade) | 0),
+    (((d[i + 1] ?? 0) * shade) | 0),
+    (((d[i + 2] ?? 0) * shade) | 0),
   ];
 }
 

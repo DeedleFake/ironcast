@@ -226,9 +226,183 @@ export function createReactorLevel(): GameLevel {
   };
 }
 
+/** Locked cell, card, alarm, warden. Script carries the loop. */
+export function createNightVaultLevel(): GameLevel {
+  const w = 22;
+  const h = 16;
+  const walls = bordered(w, h, 0, 3);
+
+  setRect(walls, 1, 1, 5, 5, 2);
+  setRect(walls, 2, 2, 4, 4, 0);
+  walls[3]![5] = 0;
+  walls[2]![5] = 6;
+
+  setRect(walls, 1, 7, 5, 11, 1);
+  setRect(walls, 2, 8, 4, 10, 0);
+  walls[8]![5] = 0;
+  walls[9]![5] = 0;
+
+  setRect(walls, 15, 1, 20, 5, 6);
+  setRect(walls, 16, 2, 19, 4, 0);
+  walls[3]![15] = 0;
+
+  setRect(walls, 15, 7, 20, 11, 4);
+  setRect(walls, 16, 8, 19, 10, 0);
+  walls[9]![15] = 0;
+
+  setRect(walls, 1, 12, 4, 14, 5);
+  setRect(walls, 2, 13, 3, 13, 0);
+
+  walls[4]![10] = 5;
+  walls[8]![10] = 5;
+
+  const script = `(def (announce msg)
+  (say (str ">> " msg)))
+
+(on start
+  (lock door-cell)
+  (lock door-vault)
+  (lock door-exit)
+  (set hits 0)
+  (announce "Cage locked. Shoot the fuse on the east wall."))
+
+(on shoot panel
+  (unless (get freed)
+    (set-wall panel 0)
+    (unlock door-cell)
+    (open door-cell)
+    (set freed true)
+    (announce "Cage fried. Card is in the south locker.")))
+
+(on pickup key-card
+  (unlock door-vault)
+  (announce "Vault lock dropped. Alarm!")
+  (unless (get sprung)
+    (set sprung true)
+    (spawn enemy 11.5 6.5 warden bruiser)))
+
+(on enter ambush
+  (unless (get add)
+    (set add true)
+    (spawn enemy 9.5 6.5 runner grunt)
+    (announce "Movement in the hall!")))
+
+(on die warden
+  (after 1
+    (unlock door-exit)
+    (open door-exit)
+    (give ammo 20)
+    (announce "Exit bolt released.")))
+
+(on enter pad-in
+  (if (has key-card)
+    (unless (get hopped)
+      (set hopped true)
+      (teleport player stash)
+      (announce "Sump pipe. Pad home is on the floor."))
+    (say "The grate needs a card.")))
+
+(on hurt player
+  (set hits (+ (get hits) 1))
+  (if (>= (get hits) 3)
+    (unless (get warned)
+      (set warned true)
+      (announce "You are leaking. Find a pack."))))
+`;
+
+  return {
+    version: LEVEL_VERSION,
+    name: "Night Vault",
+    width: w,
+    height: h,
+    walls,
+    spawn: { x: 3.5, y: 3.5, angle: 0 },
+    entities: [
+      {
+        id: uid("dr"),
+        type: "door",
+        x: 5.5,
+        y: 3.5,
+        name: "door-cell",
+        locked: true,
+      },
+      {
+        id: uid("dr"),
+        type: "door",
+        x: 15.5,
+        y: 3.5,
+        name: "door-vault",
+        locked: true,
+      },
+      {
+        id: uid("dr"),
+        type: "door",
+        x: 15.5,
+        y: 9.5,
+        name: "door-exit",
+        locked: true,
+      },
+      {
+        id: uid("pk"),
+        type: "pickup",
+        x: 3.5,
+        y: 9.5,
+        name: "key-card",
+        label: "KEY",
+        color: 0xd4a017,
+      },
+      { id: uid("hp"), type: "health", x: 18.5, y: 2.5 },
+      { id: uid("am"), type: "ammo", x: 8.5, y: 10.5 },
+      { id: uid("am"), type: "ammo", x: 3.5, y: 13.5 },
+      {
+        id: uid("tp"),
+        type: "teleport",
+        x: 2.5,
+        y: 13.5,
+        name: "pad-home",
+        dest: "hall-return",
+      },
+      { id: uid("en"), type: "enemy", x: 10.5, y: 3.5, name: "guard-a" },
+      { id: uid("en"), type: "enemy", x: 13.5, y: 9.5, name: "guard-b" },
+      { id: uid("ex"), type: "exit", x: 18.5, y: 9.5 },
+    ],
+    floors: (() => {
+      const g = fillColors(w, h, "#1c1a18");
+      paintRect(g, 2, 2, 4, 4, "#243038");
+      paintRect(g, 2, 8, 4, 10, "#2a2418");
+      paintRect(g, 16, 2, 19, 4, "#3a2810");
+      paintRect(g, 16, 8, 19, 10, "#281410");
+      paintRect(g, 2, 13, 3, 13, "#102418");
+      return g;
+    })(),
+    ceils: (() => {
+      const g = fillColors(w, h, "#0c0c10");
+      paintRect(g, 2, 2, 4, 4, "#101418");
+      paintRect(g, 16, 2, 19, 4, "#1a1008");
+      paintRect(g, 16, 8, 19, 10, "#140808");
+      paintRect(g, 2, 13, 3, 13, "#08140e");
+      return g;
+    })(),
+    wallColors: seedWallColors(walls),
+    fogColor: "#08070a",
+    author: "Built-in",
+    script,
+    zones: [
+      { name: "ambush", x: 7, y: 2, w: 7, h: 8 },
+      { name: "pad-in", x: 17, y: 2, w: 3, h: 3 },
+    ],
+    marks: [
+      { name: "panel", x: 5, y: 2 },
+      { name: "stash", x: 2, y: 13 },
+      { name: "hall-return", x: 8, y: 3 },
+    ],
+  };
+}
+
 export const BUILTIN_LEVELS: GameLevel[] = [
   createOutpostLevel(),
   createReactorLevel(),
+  createNightVaultLevel(),
 ];
 
 const STORAGE_KEY = "raycast-doom-custom-levels-v1";

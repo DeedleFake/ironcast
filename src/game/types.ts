@@ -2,6 +2,9 @@
 
 export const LEVEL_VERSION = 1 as const;
 
+export const MAP_MIN = 5;
+export const MAP_MAX = 64;
+
 export const DEFAULT_FLOOR = 0x2a2420;
 export const DEFAULT_CEIL = 0x12141a;
 export const DEFAULT_PICKUP = 0xaa46c8;
@@ -156,6 +159,58 @@ export function parseHexColor(s: string): number {
 
 export function hexFromColor(n: number): string {
   return `#${(n & 0xffffff).toString(16).padStart(6, "0")}`;
+}
+
+function copyGrid(
+  src: number[][] | undefined,
+  width: number,
+  height: number,
+  fill: number,
+): number[][] {
+  const out = colorGrid(width, height, fill);
+  if (!src) return out;
+  const copyH = Math.min(height, src.length);
+  for (let y = 0; y < copyH; y++) {
+    const row = src[y];
+    if (!row) continue;
+    const copyW = Math.min(width, row.length);
+    for (let x = 0; x < copyW; x++) out[y]![x] = row[x] ?? fill;
+  }
+  return out;
+}
+
+export function resizeLevel(
+  level: GameLevel,
+  width: number,
+  height: number,
+): GameLevel {
+  const w = Math.max(MAP_MIN, Math.min(MAP_MAX, width | 0));
+  const h = Math.max(MAP_MIN, Math.min(MAP_MAX, height | 0));
+  const next = cloneLevel(level);
+  if (w === next.width && h === next.height) return next;
+  next.width = w;
+  next.height = h;
+  next.walls = copyGrid(level.walls, w, h, 0);
+  next.floors = copyGrid(level.floors, w, h, DEFAULT_FLOOR);
+  next.ceils = copyGrid(level.ceils, w, h, DEFAULT_CEIL);
+  next.wallColors = copyGrid(level.wallColors, w, h, 0);
+  next.spawn = {
+    ...next.spawn,
+    x: Math.min(Math.max(next.spawn.x, 0.5), w - 0.5),
+    y: Math.min(Math.max(next.spawn.y, 0.5), h - 0.5),
+  };
+  next.entities = next.entities.filter(
+    (e) => Math.floor(e.x) < w && Math.floor(e.y) < h && e.x >= 0 && e.y >= 0,
+  );
+  next.marks = (next.marks ?? []).filter((m) => m.x < w && m.y < h && m.x >= 0 && m.y >= 0);
+  next.zones = (next.zones ?? [])
+    .map((z) => ({
+      ...z,
+      w: Math.min(z.w, w - z.x),
+      h: Math.min(z.h, h - z.y),
+    }))
+    .filter((z) => z.x < w && z.y < h && z.w > 0 && z.h > 0);
+  return next;
 }
 
 export function cloneLevel(level: GameLevel): GameLevel {

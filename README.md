@@ -22,6 +22,8 @@ Health packs, ammo, and the exit are items on the map. Enemies walk and go aroun
 
 The editor is a top-down grid. The left side is the palette. Options for the selected brush or thing appear under the palette.
 
+The footer has width and height fields. Maps must be between 5×5 and 64×64. A smaller map drops cells that are outside. A larger map adds empty cells.
+
 ### Tools
 
 Paint, Fill, Box, Box fill, and Line draw walls and things. Select changes options on items that are already on the map. Erase deletes walls, things, marks, and zones. Pick copies a wall or a thing into the brush.

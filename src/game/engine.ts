@@ -8,6 +8,7 @@ import { cloneLevel, DEFAULT_PICKUP, defaultWallColor, hexFromColor, seedWallCol
 import {
   getTextures,
   labeledPickup,
+  sampleDoor,
   sampleSprite,
   sampleWall,
   type TextureAtlas,
@@ -996,6 +997,8 @@ export function renderGame(
     let hit = 0;
     let side = 0;
     let texId = 1;
+    let doorLocked = false;
+    let hitDoor = false;
     let guard = 0;
     while (hit === 0 && guard++ < 64) {
       if (sideDistX < sideDistY) {
@@ -1021,9 +1024,13 @@ export function renderGame(
       if (cell > 0) {
         hit = 1;
         texId = cell;
-      } else if (closedDoorAt(state, mapX, mapY)) {
-        hit = 1;
-        texId = 3;
+      } else {
+        const door = closedDoorAt(state, mapX, mapY);
+        if (door) {
+          hit = 1;
+          hitDoor = true;
+          doorLocked = door.locked;
+        }
       }
     }
 
@@ -1083,14 +1090,21 @@ export function renderGame(
       const texY = Math.floor(((d * atlas.size) / lineHeight) / 256);
       const u = texX / atlas.size;
       const v = texY / atlas.size;
-      const [r, g, b] = sampleWall(
-        atlas,
-        texId,
-        u,
-        v,
-        shade,
-        wallColors?.[mapY]?.[mapX] ?? 0,
-      );
+      const [r, g, b] = hitDoor
+        ? sampleDoor(
+            doorLocked ? atlas.doorLocked : atlas.doorClosed,
+            u,
+            v,
+            shade,
+          )
+        : sampleWall(
+            atlas,
+            texId,
+            u,
+            v,
+            shade,
+            wallColors?.[mapY]?.[mapX] ?? 0,
+          );
       const i = (y * width + colX) * 4;
       pix[i] = r;
       pix[i + 1] = g;
