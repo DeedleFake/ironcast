@@ -246,6 +246,13 @@ function Types() {
         </p>
       </Block>
       <Block>
+        <H>Map</H>
+        <p>
+          <Code>[hp: 3 name: "guard"]</Code> is a map. A map holds named
+          fields. Each key is a string. <Code>[:]</Code> is an empty map.
+        </p>
+      </Block>
+      <Block>
         <H>Name</H>
         <p>
           A thing name is a string. <Code>"door-armory"</Code> is the
@@ -328,6 +335,20 @@ function Syntax() {
         </p>
       </Block>
       <Block>
+        <H>Map literals</H>
+        <p>
+          The same brackets write a map when every item is a{" "}
+          <Code>name: value</Code> pair.{" "}
+          <Code>[hp: 3 name: "guard"]</Code> is a map.{" "}
+          <Code>[:]</Code> is an empty map. <Code>[]</Code> is an
+          empty list, not an empty map.
+        </p>
+        <p>
+          A key is a string. <Code>hp:</Code> is the key{" "}
+          <Code>"hp"</Code>. A map cannot mix keys and other items.
+        </p>
+      </Block>
+      <Block>
         <H>Words</H>
         <p>
           <Code>true</Code>, <Code>false</Code>, and <Code>nil</Code> are
@@ -366,6 +387,10 @@ function Syntax() {
         <p>
           A list <Code>[a b]</Code> evaluates each item. It does not call
           the first item. The result is a list of those values.
+        </p>
+        <p>
+          A map evaluates each value. The keys stay as they are. The result
+          is a map.
         </p>
       </Block>
     </div>
@@ -425,10 +450,19 @@ else
       <Block>
         <H>let</H>
         <p>
-          <Code>(let ((n 1) (m 2)) ...)</Code> makes local names for the
-          body. Each binding is a list of a name and a value.
+          <Code>(let map body...)</Code> makes local names from a map.
+          Each key becomes a name. Each value is the value of that name.
         </p>
-        <p>Those names exist only in the body.</p>
+        <p>
+          <Code>(let [n: 1 m: 2] ...)</Code> uses a map literal.{" "}
+          <Code>(let (get-wall target) ...)</Code> uses a map from a
+          call. Those names exist only in the body.
+        </p>
+        <p>
+          Values in the map run before the names exist. A binding cannot use
+          another binding in the same <Code>let</Code>. To join maps first,
+          use <Code>merge</Code>.
+        </p>
       </Block>
       <Block>
         <H>def</H>
@@ -590,6 +624,14 @@ function Builtins() {
             <Code>[a b ...]</Code> makes a list of the values.
           </li>
           <li>
+            <Code>[a: 1 b: 2]</Code> makes a map. <Code>[:]</Code> is
+            an empty map.
+          </li>
+          <li>
+            <Code>(merge a b ...)</Code> joins maps into one map. A later
+            map wins on the same key. A non-map value is an error.
+          </li>
+          <li>
             <Code>(cons a xs)</Code> puts <Code>a</Code> at the front of list{" "}
             <Code>xs</Code>.
           </li>
@@ -609,11 +651,12 @@ function Builtins() {
       <Block>
         <H>Type tests</H>
         <p>
-          <Code>empty?</Code> is true for <Code>nil</Code>, an empty list, or
-          an empty string.
+          <Code>empty?</Code> is true for <Code>nil</Code>, an empty list, an
+          empty map, or an empty string.
         </p>
         <p>
-          <Code>list?</Code>, <Code>num?</Code>, <Code>str?</Code>,{" "}
+          <Code>list?</Code>, <Code>map?</Code>, <Code>num?</Code>,{" "}
+          <Code>str?</Code>,{" "}
           <Code>bool?</Code>, and <Code>nil?</Code> test the type of one
           value.
         </p>
@@ -723,12 +766,16 @@ function Commands() {
           rest of the fight. <Code>(get "sprung")</Code> reads that
           value. A missing value is <Code>nil</Code>.
         </p>
+        <p>
+          <Code>(get attrs "locked")</Code> reads a key from a map. A
+          missing key is <Code>nil</Code>.
+        </p>
       </Block>
       <Block>
         <H>set-attr, get-attr</H>
         <p>
           <Code>set-attr</Code> changes a named thing.{" "}
-          <Code>get-attr</Code> reads one field from a named thing.
+          <Code>get-attr</Code> reads a named thing.
         </p>
         <p>
           <Code>set-attr</Code> uses keys. <Code>id:</Code> is one
@@ -754,11 +801,11 @@ function Commands() {
           changes every name in the list.
         </p>
         <p>
+          <Code>(get-attr "door-armory")</Code> returns a map of the
+          fields that thing has.{" "}
           <Code>(get-attr "door-armory" "locked")</Code> reads one
-          field. The first value is the name of the thing. The second value
-          is the field. If the thing is missing, the result is{" "}
-          <Code>nil</Code>. You can also read <Code>"type"</Code> and{" "}
-          <Code>"id"</Code>.
+          field. If the thing is missing, the result is <Code>nil</Code>.
+          You can also read <Code>"type"</Code> and <Code>"id"</Code>.
         </p>
         <p>
           A button is a use point. The player cannot see it. You can put a
@@ -819,12 +866,13 @@ function Commands() {
       <Block>
         <H>get-wall</H>
         <p>
-          <Code>get-wall</Code> reads one field from one cell. The
-          call has no keys.
+          <Code>get-wall</Code> reads a cell. The call has no keys.
         </p>
         <p>
-          <Code>(get-wall "panel" "type")</Code> uses a mark or a
-          named thing.{" "}
+          <Code>(get-wall "panel")</Code> returns a map with{" "}
+          <Code>type</Code>, <Code>color</Code>, <Code>floor</Code>,
+          and <Code>ceiling</Code>.{" "}
+          <Code>(get-wall "panel" "type")</Code> reads one field.{" "}
           <Code>(get-wall [5 8] "color")</Code> uses a point.
         </p>
         <p>

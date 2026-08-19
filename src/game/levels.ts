@@ -469,13 +469,12 @@ export function createDepthsLevel(): GameLevel {
             type: "empty"
             ceiling: "#ff0000"
             floor: "#ff0000")
-  (let ((ceiling (get-wall [0 0] "ceiling"))
-        (floor (get-wall [0 0] "floor"))
-        (explosion (spawn at: target
-                          fill: true
-                          type: "pickup"
-                          color: "#ff7800"
-                          shape: "explosion")))
+  (let (merge (get-wall [0 0])
+              [explosion: (spawn at: target
+                                 fill: true
+                                 type: "pickup"
+                                 color: "#ff7800"
+                                 shape: "explosion")])
     (after 0.2
       (set-wall at: target ceiling: ceiling floor: floor)
       (remove explosion))))

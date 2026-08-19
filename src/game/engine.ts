@@ -38,6 +38,7 @@ import {
   num,
   str,
   bool,
+  mapFrom,
   type Env,
   type Host,
   type LispVal,
@@ -284,6 +285,29 @@ function nextSpawnId(state: GameState, type: string): string {
 function findNamed(state: GameState, name: string): LiveEntity | undefined {
   if (!name) return undefined;
   return state.entities.find((e) => e.alive && e.id === name);
+}
+
+function entityAttrMap(e: LiveEntity): LispVal {
+  const entries: [string, LispVal][] = [
+    ["id", e.id ? str(e.id) : nil()],
+    ["type", str(e.type)],
+  ];
+  if (e.type === "door") {
+    entries.push(["locked", bool(e.locked)], ["open", bool(e.open)]);
+  } else if (e.type === "button") {
+    entries.push(["disabled", bool(e.disabled)]);
+  } else if (e.type === "pickup") {
+    entries.push(
+      ["label", e.label ? str(e.label) : nil()],
+      ["color", str(hexFromColor(e.color))],
+      ["shape", str(e.shape)],
+    );
+  } else if (e.type === "teleport") {
+    entries.push(["dest", e.dest ? str(e.dest) : nil()]);
+  } else if (e.type === "enemy") {
+    entries.push(["variant", str(e.variant)]);
+  }
+  return mapFrom(entries);
 }
 
 function findMark(state: GameState, name: string) {
@@ -833,6 +857,7 @@ function makeHost(state: GameState): Host {
     getAttr: (id, attr) => {
       const e = findNamed(state, id);
       if (!e) return undefined;
+      if (!attr) return entityAttrMap(e);
       switch (attr) {
         case "locked":
           return bool(e.locked);
@@ -932,18 +957,24 @@ function makeHost(state: GameState): Host {
         return undefined;
       }
       const tex = level.walls[y]?.[x] ?? 0;
+      const color =
+        tex === 0
+          ? nil()
+          : str(hexFromColor(level.wallColors?.[y]?.[x] || defaultWallColor(tex)));
+      const floor = str(hexFromColor(level.floors?.[y]?.[x] ?? DEFAULT_FLOOR));
+      const ceiling = str(hexFromColor(level.ceils?.[y]?.[x] ?? DEFAULT_CEIL));
+      if (!attr) {
+        return mapFrom([
+          ["type", str(wallNameFromTex(tex))],
+          ["color", color],
+          ["floor", floor],
+          ["ceiling", ceiling],
+        ]);
+      }
       if (attr === "type") return str(wallNameFromTex(tex));
-      if (attr === "color") {
-        if (tex === 0) return nil();
-        const c = level.wallColors?.[y]?.[x] || defaultWallColor(tex);
-        return str(hexFromColor(c));
-      }
-      if (attr === "floor") {
-        return str(hexFromColor(level.floors?.[y]?.[x] ?? DEFAULT_FLOOR));
-      }
-      if (attr === "ceiling") {
-        return str(hexFromColor(level.ceils?.[y]?.[x] ?? DEFAULT_CEIL));
-      }
+      if (attr === "color") return color;
+      if (attr === "floor") return floor;
+      if (attr === "ceiling") return ceiling;
       return nil();
     },
     spawn: (opts) => {
