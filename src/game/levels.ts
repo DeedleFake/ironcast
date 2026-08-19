@@ -287,12 +287,12 @@ export function createNightVaultLevel(): GameLevel {
   (announce "Vault lock dropped. Alarm!")
   (if not (get "sprung")
     (set "sprung" true)
-    (spawn type: "enemy" x: 11.5 y: 6.5 id: "warden" variant: "bruiser")))
+    (spawn type: "enemy" at: [11.5 6.5] id: "warden" variant: "bruiser")))
 
 (on enter (zone: "ambush")
   (if not (get "add")
     (set "add" true)
-    (spawn type: "enemy" x: 9.5 y: 6.5 id: "runner" variant: "grunt")
+    (spawn type: "enemy" at: [9.5 6.5] id: "runner" variant: "grunt")
     (announce "Movement in the hall!")))
 
 (on enter (zone: "pad-in")
@@ -469,8 +469,8 @@ export function createDepthsLevel(): GameLevel {
             type: "empty"
             ceiling: "#ff0000"
             floor: "#ff0000")
-  (let ((ceiling (get-wall 0 0 "ceiling"))
-        (floor (get-wall 0 0 "floor"))
+  (let ((ceiling (get-wall [0 0] "ceiling"))
+        (floor (get-wall [0 0] "floor"))
         (explosion (spawn at: target
                           fill: true
                           type: "pickup"

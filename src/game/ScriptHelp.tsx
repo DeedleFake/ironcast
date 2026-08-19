@@ -25,7 +25,7 @@ const SAMPLE_SRC = `; Use the same names as the editor. announce is a small help
 (on enter (zone: "ambush")
   (if not (get "sprung")
     (set "sprung" true)
-    (spawn type: "enemy" x: 14.5 y: 8.5 id: "grunt-a")
+    (spawn type: "enemy" at: [14.5 8.5] id: "grunt-a")
     (say "Ambush!")))
 
 (on die (enemy: "grunt-a")
@@ -241,8 +241,8 @@ function Types() {
       <Block>
         <H>List</H>
         <p>
-          <Code>(list 1 2 3)</Code> is a list. A list holds more than one
-          value. <Code>()</Code> is an empty list.
+          <Code>[1 2 3]</Code> is a list. A list holds more than one
+          value. <Code>[]</Code> is an empty list.
         </p>
       </Block>
       <Block>
@@ -290,9 +290,9 @@ function Syntax() {
         </p>
       </Block>
       <Block>
-        <H>Lists</H>
+        <H>Calls</H>
         <p>
-          <Code>(</Code> and <Code>)</Code> make a list. The first item is the
+          <Code>(</Code> and <Code>)</Code> make a call. The first item is the
           function or the keyword. The other items are arguments.
         </p>
         <p>
@@ -313,6 +313,18 @@ function Syntax() {
           A string sits between double quotes.{" "}
           <Code>\n</Code> is a new line. <Code>\t</Code> is a tab. A backslash
           plus one other character inserts that character.
+        </p>
+      </Block>
+      <Block>
+        <H>List literals</H>
+        <p>
+          <Code>[</Code> and <Code>]</Code> write a list.{" "}
+          <Code>[1 2 3]</Code> is a list of three numbers.{" "}
+          <Code>[]</Code> is an empty list.
+        </p>
+        <p>
+          This is not a call. The script keeps the items. It does not run the
+          first item as a function.
         </p>
       </Block>
       <Block>
@@ -346,10 +358,14 @@ function Syntax() {
           with <Code>unknown name</Code>.
         </p>
         <p>
-          A list <Code>(f a b)</Code> evaluates <Code>f</Code>. Then the list
-          evaluates each argument. Then the list calls <Code>f</Code>. A
+          A call <Code>(f a b)</Code> evaluates <Code>f</Code>. Then it
+          evaluates each argument. Then it calls <Code>f</Code>. A
           keyword does not follow this rule. The Keywords tab lists those
           forms.
+        </p>
+        <p>
+          A list <Code>[a b]</Code> evaluates each item. It does not call
+          the first item. The result is a list of those values.
         </p>
       </Block>
     </div>
@@ -571,7 +587,7 @@ function Builtins() {
             list.
           </li>
           <li>
-            <Code>(list a b ...)</Code> makes a list of the arguments.
+            <Code>[a b ...]</Code> makes a list of the values.
           </li>
           <li>
             <Code>(cons a xs)</Code> puts <Code>a</Code> at the front of list{" "}
@@ -734,7 +750,7 @@ function Commands() {
         <p>
           <Code>(set-attr id: "door-armory" locked: true)</Code>{" "}
           locks that door. One call can change more than one field.{" "}
-          <Code>(set-attr id: (list "door-a" "door-b") open: true)</Code>{" "}
+          <Code>(set-attr id: ["door-a" "door-b"] open: true)</Code>{" "}
           changes every name in the list.
         </p>
         <p>
@@ -761,10 +777,10 @@ function Commands() {
           only.
         </p>
         <p>
-          The cells are <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>.{" "}
-          <Code>at:</Code> is the name of a mark, a door, or a zone. A zone
-          sets every square in that zone. <Code>x:</Code> and <Code>y:</Code>{" "}
-          are cell coordinates.
+          The cells are <Code>at:</Code>. <Code>at:</Code> is the name of
+          a mark, a door, or a zone, or a point{" "}
+          <Code>[x y]</Code>. A zone sets every square in that zone. A
+          point is one cell.
         </p>
         <p>
           <Code>type:</Code> is a pattern name. The names are{" "}
@@ -788,7 +804,7 @@ function Commands() {
           </li>
           <li>
             <Code>
-              (set-wall x: 5 y: 8 type: "rust-metal" color:
+              (set-wall at: [5 8] type: "rust-metal" color:
               "#8b3a3a")
             </Code>
           </li>
@@ -809,8 +825,7 @@ function Commands() {
         <p>
           <Code>(get-wall "panel" "type")</Code> uses a mark or a
           named thing.{" "}
-          <Code>(get-wall 5 8 "color")</Code> uses cell
-          coordinates.
+          <Code>(get-wall [5 8] "color")</Code> uses a point.
         </p>
         <p>
           The field is <Code>"type"</Code>, <Code>"color"</Code>,{" "}
@@ -828,15 +843,15 @@ function Commands() {
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>(remove "grunt-a")</Code> deletes that thing.{" "}
-            <Code>(remove (list "a" "b"))</Code> deletes each
+            <Code>(remove ["a" "b"])</Code> deletes each
             name in the list.
           </li>
           <li>
             <Code>(teleport "player" "stash")</Code> moves
             the player to that mark, thing, or zone. A zone picks a random
             open cell. If the mover is near that zone, farther cells
-            are more likely. <Code>(teleport "player" x y)</Code> uses
-            numbers. The first argument can also be a thing name.
+            are more likely. <Code>(teleport "player" [5 8])</Code> uses
+            a point. The first argument can also be a thing name.
           </li>
           <li>
             <Code>(win)</Code> and <Code>(lose)</Code> end the fight.
@@ -853,13 +868,14 @@ function Commands() {
       <Block>
         <H>Place</H>
         <p>
-          Every call needs <Code>type:</Code> and a place. The place is{" "}
-          <Code>at:</Code> or <Code>x:</Code> and <Code>y:</Code>.
+          Every call needs <Code>type:</Code> and <Code>at:</Code>.
         </p>
         <p>
-          <Code>at:</Code> is the name of a mark, a thing, or a zone. A
-          mark or a thing is one place. A zone picks a random open cell.
-          The picker skips walls. It prefers a cell with no other thing.
+          <Code>at:</Code> is the name of a mark, a thing, or a zone, or a
+          point <Code>[x y]</Code>. A mark or a thing is one place. A
+          zone picks a random open cell. The picker skips walls. It prefers
+          a cell with no other thing. The center of a cell is a number that
+          ends in <Code>.5</Code>.
         </p>
         <p>
           <Code>fill: true</Code> with <Code>at:</Code> set to a
@@ -867,11 +883,7 @@ function Commands() {
           walls, closed doors, and cells that already have a thing. The
           result is a list of the new names. A mark or a thing with{" "}
           <Code>fill: true</Code> still makes one thing, in a list of
-          one.
-        </p>
-        <p>
-          <Code>x:</Code> and <Code>y:</Code> are map positions. The center
-          of a cell is a number that ends in <Code>.5</Code>.
+          one. <Code>fill:</Code> needs a name, not a point.
         </p>
       </Block>
       <Block>
@@ -963,7 +975,7 @@ function Commands() {
           </li>
           <li>
             <Code>
-              (spawn type: "enemy" x: 11.5 y: 6.5 id: (str
+              (spawn type: "enemy" at: [11.5 6.5] id: (str
               "enemy-" n))
             </Code>
           </li>
@@ -975,7 +987,7 @@ function Commands() {
           </li>
           <li>
             <Code>
-              (spawn type: "teleport" x: 8.5 y: 10.5 dest:
+              (spawn type: "teleport" at: [8.5 10.5] dest:
               "stash")
             </Code>
           </li>

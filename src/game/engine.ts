@@ -1011,16 +1011,21 @@ function makeHost(state: GameState): Host {
       e.alive = false;
       return true;
     },
-    teleport: (who, dest, y) => {
+    teleport: (who, dest) => {
       let tx: number | null = null;
       let ty: number | null = null;
       const self =
         who === "player"
           ? { x: state.px, y: state.py }
           : findNamed(state, who);
-      if (dest.k === "num" && y?.k === "num") {
-        tx = dest.v;
-        ty = y.v;
+      if (
+        dest.k === "list" &&
+        dest.v.length === 2 &&
+        dest.v[0]?.k === "num" &&
+        dest.v[1]?.k === "num"
+      ) {
+        tx = dest.v[0].v;
+        ty = dest.v[1].v;
       } else if (dest.k === "sym" || dest.k === "str") {
         const spot = resolveSpot(
           state,

@@ -8,7 +8,7 @@ export type LispVal = (
   | { k: "bool"; v: boolean }
   | { k: "nil" }
   | { k: "sym"; v: string }
-  | { k: "list"; v: LispVal[] }
+  | { k: "list"; v: LispVal[]; vec?: boolean }
   | { k: "comment"; v: string }
   | { k: "fn"; clauses: Clause[]; keys: string[]; env: Env }
 ) & { cmt?: string; blank?: boolean; broke?: boolean };
@@ -73,7 +73,6 @@ export const BUILTINS = new Set([
   ">=",
   "str",
   "len",
-  "list",
   "cons",
   "first",
   "rest",
@@ -127,8 +126,8 @@ export function bool(v: boolean): LispVal {
 export function sym(v: string): LispVal {
   return { k: "sym", v };
 }
-export function list(v: LispVal[]): LispVal {
-  return { k: "list", v };
+export function list(v: LispVal[], vec = false): LispVal {
+  return vec ? { k: "list", v, vec: true } : { k: "list", v };
 }
 
 export function truthy(v: LispVal): boolean {
@@ -150,6 +149,17 @@ export function asName(v: LispVal): string {
 function asIdList(v: LispVal): string[] {
   if (v.k === "list") return v.v.map(asName);
   return [asName(v)];
+}
+
+function asPlace(
+  v: LispVal,
+  ctx: string,
+): { at: string } | { x: number; y: number } {
+  if (v.k === "list") {
+    if (v.v.length !== 2) throw new LispError(`${ctx} needs [x y]`);
+    return { x: asNum(v.v[0]!, ctx), y: asNum(v.v[1]!, ctx) };
+  }
+  return { at: asName(v) };
 }
 
 export function asColor(v: LispVal, ctx: string): number {
@@ -182,7 +192,7 @@ export function printVal(v: LispVal): string {
     case "fn":
       return "#<fn>";
     case "list":
-      return `(${v.v.map(printVal).join(" ")})`;
+      return `[${v.v.map(printVal).join(" ")}]`;
     case "comment":
       return v.v;
   }
@@ -209,7 +219,7 @@ export function tokenize(src: string): Token[] {
       i = j;
       continue;
     }
-    if (c === "(" || c === ")") {
+    if (c === "(" || c === ")" || c === "[" || c === "]") {
       push("paren", c);
       i++;
       continue;
@@ -233,7 +243,7 @@ export function tokenize(src: string): Token[] {
       continue;
     }
     let j = i + 1;
-    while (j < n && !" \t\n\r();".includes(src[j]!)) j++;
+    while (j < n && !" \t\n\r();[]".includes(src[j]!)) j++;
     const word = src.slice(i, j);
     if (/^[+-]?\d+(\.\d+)?$/.test(word)) push("number", word);
     else if (word.endsWith(":") && word.length > 1) push("keyword", word);
@@ -304,29 +314,35 @@ function attachTrail(p: { s: string; i: number }, v: LispVal): LispVal {
   return v;
 }
 
+function readDelimited(p: { s: string; i: number }, close: ")" | "]"): LispVal {
+  const open = p.i;
+  p.i++;
+  const xs: LispVal[] = [];
+  for (;;) {
+    skip(p);
+    if (p.i >= p.s.length) throw new LispError(`missing ${close}`);
+    const ch = p.s[p.i]!;
+    if (ch === close) {
+      p.i++;
+      break;
+    }
+    if (ch === ")" || ch === "]") throw new LispError(`unexpected ${ch}`);
+    xs.push(read(p));
+  }
+  const form = attachTrail(p, list(xs, close === "]"));
+  if (p.s.slice(open, p.i).includes("\n")) form.broke = true;
+  return form;
+}
+
 function read(p: { s: string; i: number }): LispVal {
   skip(p);
   if (p.i >= p.s.length) throw new LispError("unexpected end of script");
   const c = p.s[p.i]!;
   if (c === ";") return readComment(p);
-  if (c === "(") {
-    const open = p.i;
-    p.i++;
-    const xs: LispVal[] = [];
-    for (;;) {
-      skip(p);
-      if (p.i >= p.s.length) throw new LispError("missing )");
-      if (p.s[p.i] === ")") {
-        p.i++;
-        break;
-      }
-      xs.push(read(p));
-    }
-    const form = attachTrail(p, list(xs));
-    if (p.s.slice(open, p.i).includes("\n")) form.broke = true;
-    return form;
-  }
+  if (c === "(") return readDelimited(p, ")");
+  if (c === "[") return readDelimited(p, "]");
   if (c === ")") throw new LispError("unexpected )");
+  if (c === "]") throw new LispError("unexpected ]");
   if (c === "'") throw new LispError("unexpected '");
   if (c === '"') {
     p.i++;
@@ -349,7 +365,7 @@ function read(p: { s: string; i: number }): LispVal {
     throw new LispError("unterminated string");
   }
   let j = p.i + 1;
-  while (j < p.s.length && !" \t\n\r();".includes(p.s[j]!)) j++;
+  while (j < p.s.length && !" \t\n\r();[]".includes(p.s[j]!)) j++;
   const word = p.s.slice(p.i, j);
   p.i = j;
   if (word === "true") return attachTrail(p, bool(true));
@@ -457,7 +473,17 @@ function suffixCmt(v: LispVal, text: string): string {
 function formatVal(v: LispVal, indent: number): string {
   if (v.k === "comment") return v.v;
   if (v.k !== "list") return formatAtom(v);
-  if (v.v.length === 0) return suffixCmt(v, "()");
+  const empty = v.vec ? "[]" : "()";
+  if (v.v.length === 0) return suffixCmt(v, empty);
+  if (v.vec) {
+    if (hasBreakComment(v) || v.broke) {
+      return suffixCmt(v, formatVecBlock(v, indent));
+    }
+    const inline = formatInline(v);
+    const col = indent * 2;
+    if (inline.length + col <= MAX_INLINE) return inline;
+    return suffixCmt(v, formatVecBlock(v, indent));
+  }
   const headName = v.v[0]?.k === "sym" ? v.v[0].v : "";
   if (hasBreakComment(v) || (BODY_SPECIALS.has(headName) && v.broke)) {
     return suffixCmt(v, formatBlock(v, indent));
@@ -469,13 +495,24 @@ function formatVal(v: LispVal, indent: number): string {
 }
 
 /** Close parens hang off the last form — never on their own line. */
-function closeOn(lines: string[]): string {
-  if (!lines.length) return ")";
+function closeOn(lines: string[], close = ")"): string {
+  if (!lines.length) return close;
   const last = lines[lines.length - 1]!;
   const cmt = last.search(/ ;/);
-  if (cmt >= 0) lines[lines.length - 1] = last.slice(0, cmt) + ")" + last.slice(cmt);
-  else lines[lines.length - 1] = last + ")";
+  if (cmt >= 0) lines[lines.length - 1] = last.slice(0, cmt) + close + last.slice(cmt);
+  else lines[lines.length - 1] = last + close;
   return lines.join("\n");
+}
+
+function formatVecBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
+  const pad = "  ".repeat(indent);
+  const body = pad + "  ";
+  if (!v.v.length) return "[]";
+  const lines = [`[${formatVal(v.v[0]!, indent)}`];
+  for (const item of v.v.slice(1)) {
+    lines.push(body + formatVal(item, indent + 1));
+  }
+  return closeOn(lines, "]");
 }
 
 function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
@@ -625,12 +662,14 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
 
 function formatInline(v: LispVal): string {
   if (v.k !== "list") return formatAtom(v);
-  if (!v.v.length) return suffixCmt(v, "()");
+  const open = v.vec ? "[" : "(";
+  const close = v.vec ? "]" : ")";
+  if (!v.v.length) return suffixCmt(v, open + close);
   const last = v.v[v.v.length - 1]!;
   const parts = v.v.map((x, i) =>
     i === v.v.length - 1 ? formatCore(x) : formatInline(x),
   );
-  let text = `(${parts.join(" ")})`;
+  let text = `${open}${parts.join(" ")}${close}`;
   if (last.cmt) text += ` ${last.cmt}`;
   return suffixCmt(v, text);
 }
@@ -717,7 +756,7 @@ export type Host = {
     shape?: string;
   }) => string | string[] | null;
   remove: (name: string) => boolean;
-  teleport: (who: string, dest: LispVal, y?: LispVal) => boolean;
+  teleport: (who: string, dest: LispVal) => boolean;
   win: () => void;
   lose: () => void;
   after: (sec: number, thunk: () => void) => void;
@@ -1042,6 +1081,13 @@ function evalVal(v: LispVal, env: Env, ctx: Ctx): LispVal {
     return lookup(env, v.v);
   }
   if (v.k !== "list" || v.v.length === 0) return v;
+  if (v.vec) {
+    const items = v.v.filter((x) => x.k !== "comment");
+    return list(
+      items.map((x) => evalVal(x, env, ctx)),
+      true,
+    );
+  }
   const xs = v.v.filter((x) => x.k !== "comment");
   if (!xs.length) return nil();
   const head = xs[0]!;
@@ -1249,8 +1295,6 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       if (a?.k === "list") return num(a.v.length);
       throw new LispError("len needs a string or list");
     }
-    case "list":
-      return list(args);
     case "cons":
       if (args[1]?.k === "list") return list([args[0]!, ...args[1].v]);
       return list([args[0]!, args[1] ?? nil()]);
@@ -1393,14 +1437,12 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       if (call.pos.length) {
         throw new LispError("set-wall needs keys");
       }
-      const allowed = ["at", "x", "y", "type", "color", "floor", "ceiling"];
+      const allowed = ["at", "type", "color", "floor", "ceiling"];
       for (const key of call.keys.keys()) {
         if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
       }
       const at = call.keys.get("at");
-      const x = call.keys.get("x");
-      const y = call.keys.get("y");
-      if (!at && (!x || !y)) throw new LispError("set-wall needs at: or x: y:");
+      if (!at) throw new LispError("set-wall needs at:");
       const type = call.keys.get("type");
       if (type && texFromWallName(asName(type)) === null) {
         throw new LispError(`unknown type: ${asName(type)}`);
@@ -1408,11 +1450,10 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       const color = call.keys.get("color");
       const floor = call.keys.get("floor");
       const ceiling = call.keys.get("ceiling");
+      const place = asPlace(at, "set-wall");
       return bool(
         h.setWall({
-          at: at ? asName(at) : undefined,
-          x: x ? asNum(x, "set-wall") : undefined,
-          y: y ? asNum(y, "set-wall") : undefined,
+          ...place,
           type: type ? asName(type) : undefined,
           color: color ? asColor(color, "color") : undefined,
           floor: floor ? asColor(floor, "floor") : undefined,
@@ -1421,26 +1462,14 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       );
     }
     case "get-wall": {
-      if (args.length === 2) {
-        const attr = asName(args[1]!);
-        if (!["type", "color", "floor", "ceiling"].includes(attr)) {
-          throw new LispError(`unknown attr ${attr}`);
-        }
-        return h.getWall({ at: asName(args[0]!) }, attr) ?? nil();
+      if (args.length !== 2) {
+        throw new LispError("get-wall needs a place and an attr");
       }
-      if (args.length === 3) {
-        const attr = asName(args[2]!);
-        if (!["type", "color", "floor", "ceiling"].includes(attr)) {
-          throw new LispError(`unknown attr ${attr}`);
-        }
-        return (
-          h.getWall(
-            { x: asNum(args[0]!, "get-wall"), y: asNum(args[1]!, "get-wall") },
-            attr,
-          ) ?? nil()
-        );
+      const attr = asName(args[1]!);
+      if (!["type", "color", "floor", "ceiling"].includes(attr)) {
+        throw new LispError(`unknown attr ${attr}`);
       }
-      throw new LispError("get-wall needs a mark and an attr, or x y attr");
+      return h.getWall(asPlace(args[0]!, "get-wall"), attr) ?? nil();
     }
     case "spawn": {
       if (call.pos.length) {
@@ -1449,8 +1478,6 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       const allowed = [
         "type",
         "at",
-        "x",
-        "y",
         "id",
         "variant",
         "dest",
@@ -1466,10 +1493,8 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       }
       const type = call.keys.get("type");
       const at = call.keys.get("at");
-      const x = call.keys.get("x");
-      const y = call.keys.get("y");
       if (!type) throw new LispError("spawn needs type:");
-      if (!at && (!x || !y)) throw new LispError("spawn needs at: or x: y:");
+      if (!at) throw new LispError("spawn needs at:");
       const kind = asName(type);
       const variant = call.keys.get("variant");
       const dest = call.keys.get("dest");
@@ -1498,12 +1523,11 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       }
       const publicId = call.keys.get("id");
       const fill = call.keys.has("fill") && truthy(call.keys.get("fill")!);
-      if (fill && !at) throw new LispError("fill: needs at:");
+      const place = asPlace(at, "spawn");
+      if (fill && !("at" in place)) throw new LispError("fill: needs a name");
       const made = h.spawn({
         type: kind,
-        at: at ? asName(at) : undefined,
-        x: x ? asNum(x, "spawn") : undefined,
-        y: y ? asNum(y, "spawn") : undefined,
+        ...place,
         id: publicId ? asName(publicId) : undefined,
         variant: variant ? asName(variant) : undefined,
         dest: dest ? asName(dest) : undefined,
@@ -1515,7 +1539,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         shape: shape ? asName(shape) : undefined,
       });
       if (made === null) throw new LispError("spawn at: not found");
-      if (Array.isArray(made)) return list(made.map(str));
+      if (Array.isArray(made)) return list(made.map(str), true);
       return str(made);
     }
     case "remove": {
@@ -1527,7 +1551,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
     }
     case "teleport":
       return bool(
-        h.teleport(asName(args[0] ?? sym("player")), args[1] ?? nil(), args[2]),
+        h.teleport(asName(args[0] ?? sym("player")), args[1] ?? nil()),
       );
     case "win":
       h.win();
