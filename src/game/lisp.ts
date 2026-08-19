@@ -96,6 +96,8 @@ export const BUILTINS = new Set([
   "nil?",
   "get",
   "set",
+  "get-prop",
+  "set-prop",
   "merge",
   "has",
   "give",
@@ -1660,14 +1662,23 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       return bool(args[0]?.k === "bool");
     case "nil?":
       return bool(args[0]?.k === "nil");
-    case "get":
-      if (args.length >= 2) {
-        const m = args[0]!;
-        if (m.k !== "map") throw new LispError("get needs a map");
-        return m.v.get(asName(args[1]!)) ?? nil();
-      }
-      return h.getVar(asName(args[0] ?? nil()));
+    case "get": {
+      if (args.length < 2) throw new LispError("get needs a map and a key");
+      const m = args[0]!;
+      if (m.k !== "map") throw new LispError("get needs a map");
+      return m.v.get(asName(args[1]!)) ?? nil();
+    }
     case "set": {
+      if (args.length < 3) throw new LispError("set needs a map, a key, and a value");
+      const m = args[0]!;
+      if (m.k !== "map") throw new LispError("set needs a map");
+      const out = new Map(m.v);
+      out.set(asName(args[1]!), args[2]!);
+      return { k: "map", v: out };
+    }
+    case "get-prop":
+      return h.getVar(asName(args[0] ?? nil()));
+    case "set-prop": {
       const val = args[1] ?? nil();
       h.setVar(asName(args[0] ?? nil()), val);
       return val;

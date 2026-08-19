@@ -270,35 +270,35 @@ export function createNightVaultLevel(): GameLevel {
   (set-attr "door-cell" [locked: true])
   (set-attr "door-vault" [locked: true])
   (set-attr "door-exit" [locked: true])
-  (set "hits" 0)
+  (set-prop "hits" 0)
   (announce "Cage locked. Shoot the fuse on the east wall."))
 
 ; A shot on the fuse opens the cage.
 (on shoot (target: "panel")
-  (if not (get "freed")
+  (if not (get-prop "freed")
     (set-wall "panel" [type: "empty"])
     (set-attr "door-cell" [locked: false open: true])
-    (set "freed" true)
+    (set-prop "freed" true)
     (announce "Cage fried. Card is in the south locker.")))
 
 ; The card opens the vault and calls the warden.
 (on pickup (target: "key-card")
   (set-attr "door-vault" [locked: false])
   (announce "Vault lock dropped. Alarm!")
-  (if not (get "sprung")
-    (set "sprung" true)
+  (if not (get-prop "sprung")
+    (set-prop "sprung" true)
     (spawn [11.5 6.5] "enemy" [id: "warden" variant: "bruiser"])))
 
 (on enter (zone: "ambush")
-  (if not (get "add")
-    (set "add" true)
+  (if not (get-prop "add")
+    (set-prop "add" true)
     (spawn [9.5 6.5] "enemy" [id: "runner" variant: "grunt"])
     (announce "Movement in the hall!")))
 
 (on enter (zone: "pad-in")
   (if (has "key-card")
-    (if not (get "hopped")
-      (set "hopped" true)
+    (if not (get-prop "hopped")
+      (set-prop "hopped" true)
       (teleport "player" "stash")
       (announce "Sump pipe. Pad home is on the floor."))
   else
@@ -311,10 +311,10 @@ export function createNightVaultLevel(): GameLevel {
     (announce "Exit bolt released.")))
 
 (on hurt (target: "player")
-  (set "hits" (+ (get "hits") 1))
-  (if (>= (get "hits") 3)
-    (if not (get "warned")
-      (set "warned" true)
+  (set-prop "hits" (+ (get-prop "hits") 1))
+  (if (>= (get-prop "hits") 3)
+    (if not (get-prop "warned")
+      (set-prop "warned" true)
       (announce "You are leaking. Find a pack."))))
 `);
 
@@ -486,8 +486,8 @@ export function createDepthsLevel(): GameLevel {
     (teleport-guard (- n 1))))
 
 (on enter (zone: "tripwire")
-  (if not (get "spawned")
-    (set "spawned" true)
+  (if not (get-prop "spawned")
+    (set-prop "spawned" true)
     (say "You've activated my trap card!")
     (set-wall "lair" [type: "empty"
                       ceiling: "#3584e4"

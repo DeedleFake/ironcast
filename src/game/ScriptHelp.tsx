@@ -23,8 +23,8 @@ const SAMPLE_SRC = `; Use the same names as the editor. announce is a small help
 
 ; sprung remembers that the ambush already ran.
 (on enter (zone: "ambush")
-  (if not (get "sprung")
-    (set "sprung" true)
+  (if not (get-prop "sprung")
+    (set-prop "sprung" true)
     (spawn [14.5 8.5] "enemy" [id: "grunt-a"])
     (say "Ambush!")))
 
@@ -503,7 +503,7 @@ else
           <Code>(def announce (msg) ...)</Code> makes a function. The form
           matches <Code>on</Code>. The parts are the name, a parameter list,
           and the body. The body can be empty. To store a value, use{" "}
-          <Code>set</Code>.
+          <Code>set-prop</Code>.
         </p>
         <p>
           A later <Code>def</Code> with the same name adds another clause. The
@@ -663,6 +663,12 @@ function Builtins() {
           <li>
             <Code>(merge a b ...)</Code> joins maps into one map. A later
             map wins on the same key. A non-map value is an error.
+          </li>
+          <li>
+            <Code>(get m key)</Code> reads a key from a map. A missing
+            key is <Code>nil</Code>.{" "}
+            <Code>(set m key value)</Code> returns a new map with that
+            key set.
           </li>
           <li>
             <Code>(cons a xs)</Code> puts <Code>a</Code> at the front of list{" "}
@@ -853,13 +859,15 @@ function Commands() {
       <Block>
         <H>Script values</H>
         <p>
-          <Code>(set "sprung" true)</Code> stores a value for the
-          rest of the fight. <Code>(get "sprung")</Code> reads that
+          <Code>(set-prop "sprung" true)</Code> stores a value for the
+          rest of the fight. <Code>(get-prop "sprung")</Code> reads that
           value. A missing value is <Code>nil</Code>.
         </p>
         <p>
           <Code>(get attrs "locked")</Code> reads a key from a map. A
-          missing key is <Code>nil</Code>.
+          missing key is <Code>nil</Code>.{" "}
+          <Code>(set attrs "locked" true)</Code> returns a new map. The
+          old map does not change.
         </p>
       </Block>
       <Block>
