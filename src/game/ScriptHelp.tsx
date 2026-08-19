@@ -7,33 +7,33 @@ const SAMPLE_SRC = `; Use the same names as the editor. announce is a small help
 
 ; Lock the armory. Tell the player to find the key.
 (on start ()
-  (set-attr id: "door-armory" locked: true)
+  (set-attr "door-armory" [locked: true])
   (announce "Find the red key."))
 
 ; The key opens the lock.
 (on pickup (target: "key-red")
-  (set-attr id: "door-armory" locked: false)
+  (set-attr "door-armory" [locked: false])
   (announce "Armory unlocked."))
 
 (on use (target: "door-armory")
   (if (get-attr "door-armory" "locked")
     (say "Locked. Need the red key.")
   else
-    (set-attr id: "door-armory" open: true)))
+    (set-attr "door-armory" [open: true])))
 
 ; sprung remembers that the ambush already ran.
 (on enter (zone: "ambush")
   (if not (get "sprung")
     (set "sprung" true)
-    (spawn type: "enemy" at: [14.5 8.5] id: "grunt-a")
+    (spawn [14.5 8.5] "enemy" [id: "grunt-a"])
     (say "Ambush!")))
 
 (on die (enemy: "grunt-a")
   (after 1
-    (set-attr id: "door-exit" open: true)))
+    (set-attr "door-exit" [open: true])))
 
 (on shoot (target: "panel")
-  (set-wall at: "panel" type: "empty")
+  (set-wall "panel" [type: "empty"])
   (give "ammo" 20))
 `;
 
@@ -50,6 +50,7 @@ const TABS = [
   "Built-ins",
   "Events",
   "Commands",
+  "Things",
   "Example",
 ] as const;
 
@@ -104,6 +105,7 @@ export function ScriptHelp({ onClose }: { onClose: () => void }) {
           {tab === "Built-ins" ? <Builtins /> : null}
           {tab === "Events" ? <Events /> : null}
           {tab === "Commands" ? <Commands /> : null}
+          {tab === "Things" ? <Things /> : null}
           {tab === "Example" ? <Example /> : null}
         </div>
         <div className="flex shrink-0 justify-end border-t border-border px-5 py-3">
@@ -426,7 +428,7 @@ function Keywords() {
   (say "Locked.")
   (say "Find the key.")
 else if (has "key-red")
-  (set-attr id: "door-armory" open: true)
+  (set-attr "door-armory" [open: true])
 else
   (say "Still locked."))`}
         </pre>
@@ -569,7 +571,7 @@ else
         <H>after</H>
         <p>
           <Code>(after seconds ...)</Code> waits that many seconds. Then the
-          body starts. <Code>(after 1 (set-attr id: "door-exit" open: true))</Code>{" "}
+          body starts. <Code>(after 1 (set-attr "door-exit" [open: true]))</Code>{" "}
           opens that door after one second. The form holds more than one body
           form.
         </p>
@@ -867,26 +869,14 @@ function Commands() {
           <Code>get-attr</Code> reads a named thing.
         </p>
         <p>
-          <Code>set-attr</Code> uses keys. <Code>id:</Code> is one
-          name or a list of names. Each other key is a field to change.
-          The form returns true when every named thing exists.
+          <Code>(set-attr id fields)</Code> takes a name or a list of
+          names, then a map of fields to change. The form returns true when
+          every named thing exists. The Things tab lists the fields.
         </p>
         <p>
-          The fields you can change are <Code>locked:</Code>,{" "}
-          <Code>open:</Code>, <Code>disabled:</Code>,{" "}
-          <Code>dest:</Code>, <Code>label:</Code>,{" "}
-          <Code>color:</Code>, <Code>shape:</Code>, and{" "}
-          <Code>variant:</Code>.
-        </p>
-        <p>
-          <Code>locked</Code> and <Code>open</Code> belong to doors.{" "}
-          <Code>disabled</Code> belongs to buttons. A disabled button does
-          not show a use prompt. The player cannot use it.
-        </p>
-        <p>
-          <Code>(set-attr id: "door-armory" locked: true)</Code>{" "}
-          locks that door. One call can change more than one field.{" "}
-          <Code>(set-attr id: ["door-a" "door-b"] open: true)</Code>{" "}
+          <Code>(set-attr "door-armory" [locked: true])</Code> locks
+          that door.{" "}
+          <Code>(set-attr ["door-a" "door-b"] [open: true])</Code>{" "}
           changes every name in the list.
         </p>
         <p>
@@ -909,45 +899,43 @@ function Commands() {
       <Block>
         <H>set-wall</H>
         <p>
-          <Code>set-wall</Code> changes map cells. The call uses keys
-          only.
+          <Code>(set-wall place fields)</Code> changes map cells.{" "}
+          <Code>place</Code> is a name, a point <Code>[x y]</Code>, or a
+          list of those. A name can be a mark, a door, or a zone. A zone
+          sets every square in that zone. Two numbers are a point, not two
+          names.
         </p>
         <p>
-          The cells are <Code>at:</Code>. <Code>at:</Code> is the name of
-          a mark, a door, or a zone, or a point{" "}
-          <Code>[x y]</Code>. A zone sets every square in that zone. A
-          point is one cell.
+          The map can hold <Code>type</Code>, <Code>color</Code>,{" "}
+          <Code>floor</Code>, and <Code>ceiling</Code>. A missing key
+          does not change that field.
         </p>
         <p>
-          <Code>type:</Code> is a pattern name. The names are{" "}
+          <Code>type</Code> is a pattern name. The names are{" "}
           <Code>"empty"</Code>, <Code>"tech-panel"</Code>,{" "}
           <Code>"blood-brick"</Code>,{" "}
           <Code>"rust-metal"</Code>, <Code>"circuit"</Code>,{" "}
-          <Code>"stone"</Code>, and <Code>"hazard"</Code>.
+          <Code>"stone"</Code>, and <Code>"hazard"</Code>. Colors are
+          strings such as <Code>"#6b4a3a"</Code>.
         </p>
-        <p>
-          <Code>color:</Code>, <Code>floor:</Code>, and{" "}
-          <Code>ceiling:</Code> are color strings such as{" "}
-          <Code>"#6b4a3a"</Code>.
-        </p>
-        <p>A missing key does not change that attribute.</p>
         <p>Examples:</p>
         <ul className="list-disc space-y-1 pl-5">
           <li>
+            <Code>(set-wall "panel" [type: "empty"])</Code>
+          </li>
+          <li>
             <Code>
-              (set-wall at: "panel" type: "empty")
+              (set-wall [5 8] [type: "rust-metal" color: "#8b3a3a"])
             </Code>
           </li>
           <li>
             <Code>
-              (set-wall at: [5 8] type: "rust-metal" color:
-              "#8b3a3a")
+              (set-wall "ambush" [floor: "#1a3028" ceiling: "#0c1014"])
             </Code>
           </li>
           <li>
             <Code>
-              (set-wall at: "ambush" floor: "#1a3028"
-              ceiling: "#0c1014")
+              (set-wall ["panel" "server"] [type: "empty"])
             </Code>
           </li>
         </ul>
@@ -996,153 +984,127 @@ function Commands() {
         </ul>
       </Block>
       <Block>
-        <H>spawn</H>
+        <H>spawn, spawn-fill</H>
         <p>
-          <Code>spawn</Code> adds a thing. The call uses keys only. The
-          result is the name of the new thing.
-        </p>
-      </Block>
-      <Block>
-        <H>Place</H>
-        <p>
-          Every call needs <Code>type:</Code> and <Code>at:</Code>.
+          <Code>(spawn place type)</Code> adds one thing.{" "}
+          <Code>(spawn place type fields)</Code> also sets fields from a
+          map. The result is the name of the new thing.
         </p>
         <p>
-          <Code>at:</Code> is the name of a mark, a thing, or a zone, or a
-          point <Code>[x y]</Code>. A mark or a thing is one place. A
-          zone picks a random open cell. The picker skips walls. It prefers
-          a cell with no other thing. The center of a cell is a number that
-          ends in <Code>.5</Code>.
+          <Code>(spawn-fill place type)</Code> uses the same arguments. It
+          puts one thing on every cell in the place. The result is a list
+          of the new names.
         </p>
         <p>
-          <Code>fill: true</Code> with <Code>at:</Code> set to a
-          zone puts one thing on every open cell in that zone. It skips
-          walls, closed doors, and cells that already have a thing. The
-          result is a list of the new names. A mark or a thing with{" "}
-          <Code>fill: true</Code> still makes one thing, in a list of
-          one. <Code>fill:</Code> needs a name, not a point.
+          <Code>place</Code> is a mark, a thing, a zone, a point{" "}
+          <Code>[x y]</Code>, or a list of those. A mark or a thing is
+          one cell. A zone is every square in that zone. A list joins
+          those cells. A cell in more than one place counts once.
         </p>
-      </Block>
-      <Block>
-        <H>Shared keys</H>
         <p>
-          <Code>type:</Code> is one of <Code>"enemy"</Code>,{" "}
+          <Code>spawn</Code> picks one cell from that set. It prefers an
+          open cell with no other thing. If none of the cells are open,
+          it still picks one, including a wall. <Code>spawn-fill</Code>{" "}
+          uses every cell, including walls.
+        </p>
+        <p>
+          <Code>type</Code> is <Code>"enemy"</Code>,{" "}
           <Code>"ammo"</Code>, <Code>"health"</Code>,{" "}
           <Code>"exit"</Code>, <Code>"door"</Code>,{" "}
-          <Code>"teleport"</Code>,{" "}
-          <Code>"pickup"</Code>, or{" "}
-          <Code>"button"</Code>.
+          <Code>"teleport"</Code>, <Code>"pickup"</Code>, or{" "}
+          <Code>"button"</Code>. The Things tab lists the fields for each
+          type.
         </p>
         <p>
-          <Code>id:</Code> is a string. <Code>str</Code> can build
-          one. If you omit <Code>id:</Code>, <Code>spawn</Code> makes
-          a name like <Code>enemy-1</Code> and returns it. Store that
-          string if you want to use the new thing later. With{" "}
-          <Code>fill: true</Code>, each thing gets its own name.{" "}
-          <Code>id:</Code> is then a prefix, such as{" "}
-          <Code>wave-1</Code>, <Code>wave-2</Code>.
+          If you omit <Code>id</Code> in the map, the game makes a name
+          like <Code>enemy-1</Code> and returns it. Store that string if
+          you want to use the new thing later. With <Code>spawn-fill</Code>,{" "}
+          <Code>id</Code> is a prefix, such as <Code>wave-1</Code>,{" "}
+          <Code>wave-2</Code>.
         </p>
-      </Block>
-      <Block>
-        <H>enemy</H>
-        <p>
-          <Code>variant:</Code> is <Code>"grunt"</Code> or{" "}
-          <Code>"bruiser"</Code>. If the key is missing, the enemy
-          is a grunt.
-        </p>
-      </Block>
-      <Block>
-        <H>ammo, health, exit</H>
-        <p>
-          These types have no extra keys. Use <Code>type:</Code>, a
-          place, and <Code>id:</Code> if you need a name.
-        </p>
-      </Block>
-      <Block>
-        <H>door</H>
-        <p>
-          <Code>locked:</Code> is <Code>true</Code> or <Code>false</Code>. If
-          the key is missing, the door is unlocked. A spawned door is closed.
-        </p>
-      </Block>
-      <Block>
-        <H>teleport</H>
-        <p>
-          <Code>dest:</Code> is the name of a mark, a thing, or a zone. A
-          zone picks a random open cell. If the key is missing, the pad
-          has no destination.
-        </p>
-      </Block>
-      <Block>
-        <H>pickup</H>
-        <p>
-          <Code>label:</Code> is short text on the sprite. If the key is
-          missing or empty, the sprite has no text.
-        </p>
-        <p>
-          <Code>color:</Code> is a color string such as{" "}
-          <Code>"#aa46c8"</Code>. If the key is missing, the pickup
-          uses the default purple.
-        </p>
-        <p>
-          <Code>shape:</Code> is the silhouette. The names are{" "}
-          <Code>"diamond"</Code>, <Code>"square"</Code>,{" "}
-          <Code>"star"</Code>, <Code>"explosion"</Code>,{" "}
-          <Code>"circle"</Code>, <Code>"triangle"</Code>, and{" "}
-          <Code>"cross"</Code>. If the key is missing, the pickup is a
-          diamond.
-        </p>
-      </Block>
-      <Block>
-        <H>button</H>
-        <p>
-          <Code>disabled:</Code> is <Code>true</Code> or{" "}
-          <Code>false</Code>. If you omit the key, the button works. A
-          disabled button does not show a use prompt.
-        </p>
-      </Block>
-      <Block>
-        <H>Examples</H>
+        <p>Examples:</p>
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>
-              (spawn type: "enemy" at: "stash" id:
-              "warden" variant: "bruiser")
+              (spawn "stash" "enemy" [id: "warden" variant: "bruiser"])
             </Code>
           </li>
           <li>
-            <Code>
-              (spawn type: "enemy" at: [11.5 6.5] id: (str
-              "enemy-" n))
-            </Code>
+            <Code>(spawn [11.5 6.5] "enemy" [id: (str "enemy-" n)])</Code>
+          </li>
+          <li>
+            <Code>(spawn-fill "ambush" "enemy")</Code>
           </li>
           <li>
             <Code>
-              (spawn type: "door" at: "gate" id:
-              "door-cell" locked: true)
-            </Code>
-          </li>
-          <li>
-            <Code>
-              (spawn type: "teleport" at: [8.5 10.5] dest:
-              "stash")
-            </Code>
-          </li>
-          <li>
-            <Code>
-              (spawn type: "enemy" at: "ambush" fill: true)
-            </Code>
-          </li>
-          <li>
-            <Code>
-              (spawn type: "pickup" at: "loot" id:
-              "key-red" label: "K" color:
-              "#c43c3c")
+              (spawn-fill ["server" "seal"] "pickup" [shape: "explosion"])
             </Code>
           </li>
         </ul>
       </Block>
     </div>
+  );
+}
+
+function Things() {
+  return (
+    <div className="space-y-4">
+      <Block>
+        <H>Fields</H>
+        <p>
+          <Code>spawn</Code>, <Code>spawn-fill</Code>, and{" "}
+          <Code>set-attr</Code> take a map of fields.{" "}
+          <Code>get-attr</Code> returns the fields that thing has.{" "}
+          <Code>id</Code> is valid on every type. Other fields belong to
+          one type.
+        </p>
+      </Block>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[28rem] border-collapse text-left text-sm">
+          <thead>
+            <tr className="border-b border-border text-fg">
+              <th className="py-1.5 pr-3 font-medium">Type</th>
+              <th className="py-1.5 pr-3 font-medium">Field</th>
+              <th className="py-1.5 font-medium">Meaning</th>
+            </tr>
+          </thead>
+          <tbody className="text-muted">
+            <AttrRow type="every type" field="id" mean="A string name. If spawn or spawn-fill omits it, the game makes one. With spawn-fill, id is a prefix such as wave-1." />
+            <AttrRow type="enemy" field="variant" mean='"grunt" or "bruiser". If the key is missing, the enemy is a grunt.' />
+            <AttrRow type="ammo, health, exit" field="—" mean="No extra fields." />
+            <AttrRow type="door" field="locked" mean="true or false. If the key is missing on spawn, the door is unlocked. A spawned door is closed." />
+            <AttrRow type="door" field="open" fieldOnly mean="true or false. set-attr can open or close a door. spawn always makes a closed door." />
+            <AttrRow type="teleport" field="dest" mean="Name of a mark, a thing, or a zone. A zone picks a random open cell. If the key is missing, the pad has no destination." />
+            <AttrRow type="pickup" field="label" mean="Short text on the sprite. If the key is missing or empty, the sprite has no text." />
+            <AttrRow type="pickup" field="color" fieldOnly mean='A color string such as "#aa46c8". If the key is missing, the pickup is purple.' />
+            <AttrRow type="pickup" field="shape" fieldOnly mean='"diamond", "square", "star", "explosion", "circle", "triangle", or "cross". If the key is missing, the pickup is a diamond.' />
+            <AttrRow type="button" field="disabled" mean="true or false. If you omit the key, the button works. A disabled button does not show a use prompt." />
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function AttrRow({
+  type,
+  field,
+  mean,
+  fieldOnly,
+}: {
+  type: string;
+  field: string;
+  mean: string;
+  fieldOnly?: boolean;
+}) {
+  return (
+    <tr className="border-b border-border/70 align-top">
+      <td className="py-1.5 pr-3 text-fg">{fieldOnly ? "" : type}</td>
+      <td className="py-1.5 pr-3">
+        {field === "—" ? field : <Code>{field}</Code>}
+      </td>
+      <td className="py-1.5">{mean}</td>
+    </tr>
   );
 }
 

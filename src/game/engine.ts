@@ -384,6 +384,73 @@ function pickZoneCell(
   return pool[pool.length - 1]!;
 }
 
+type PlaceRef = { at: string } | { x: number; y: number };
+
+function inMap(state: GameState, x: number, y: number) {
+  return x >= 0 && y >= 0 && x < state.level.width && y < state.level.height;
+}
+
+function addCell(
+  out: Map<string, { x: number; y: number }>,
+  x: number,
+  y: number,
+  state: GameState,
+) {
+  x = Math.floor(x);
+  y = Math.floor(y);
+  if (!inMap(state, x, y)) return;
+  out.set(`${x},${y}`, { x, y });
+}
+
+/** Unique cells from names (mark / thing / zone) and [x y] points. */
+function collectPlaceCells(
+  state: GameState,
+  places: PlaceRef[],
+): { x: number; y: number }[] | null {
+  const out = new Map<string, { x: number; y: number }>();
+  for (const p of places) {
+    if ("at" in p) {
+      if (!p.at) return null;
+      const mark = findMark(state, p.at);
+      if (mark) {
+        addCell(out, mark.x, mark.y, state);
+        continue;
+      }
+      const named = findNamed(state, p.at);
+      if (named) {
+        addCell(out, named.x, named.y, state);
+        continue;
+      }
+      const zone = findZone(state, p.at);
+      if (!zone) return null;
+      const x1 = zone.x + zone.w;
+      const y1 = zone.y + zone.h;
+      for (let y = zone.y; y < y1; y++) {
+        for (let x = zone.x; x < x1; x++) addCell(out, x, y, state);
+      }
+      continue;
+    }
+    addCell(out, p.x, p.y, state);
+  }
+  return [...out.values()];
+}
+
+function cellSolid(state: GameState, x: number, y: number) {
+  return (state.level.walls[y]?.[x] ?? 0) > 0 || Boolean(closedDoorAt(state, x, y));
+}
+
+function pickSpawnCell(
+  state: GameState,
+  cells: { x: number; y: number }[],
+  from?: { x: number; y: number },
+): { x: number; y: number } | null {
+  if (!cells.length) return null;
+  const walk = cells.filter((c) => !cellSolid(state, c.x, c.y));
+  const free = walk.filter((c) => !cellBusy(state, c.x, c.y));
+  const pool = free.length ? free : walk.length ? walk : cells;
+  return pickZoneCell(pool, from);
+}
+
 function blocked(state: GameState, x: number, y: number): boolean {
   return (
     isWall(state, x - PLAYER_RADIUS, y - PLAYER_RADIUS) ||
@@ -978,6 +1045,8 @@ function makeHost(state: GameState): Host {
       return nil();
     },
     spawn: (opts) => {
+      const cells = collectPlaceCells(state, opts.places);
+      if (!cells) return null;
       const put = (x: number, y: number) => {
         const key = uid("k");
         const publicId = opts.fill
@@ -1002,39 +1071,11 @@ function makeHost(state: GameState): Host {
         return publicId;
       };
       if (opts.fill) {
-        if (!opts.at) return null;
-        const zone = findZone(state, opts.at);
-        if (!zone) {
-          const spot = resolveSpot(state, opts.at);
-          if (!spot) return null;
-          return [put(spot.x, spot.y)];
-        }
-        const ids: string[] = [];
-        const x1 = zone.x + zone.w;
-        const y1 = zone.y + zone.h;
-        for (let y = zone.y; y < y1; y++) {
-          for (let x = zone.x; x < x1; x++) {
-            if (x < 0 || y < 0 || x >= state.level.width || y >= state.level.height) {
-              continue;
-            }
-            if ((state.level.walls[y]?.[x] ?? 0) > 0) continue;
-            if (closedDoorAt(state, x, y)) continue;
-            if (cellBusy(state, x, y)) continue;
-            ids.push(put(x + 0.5, y + 0.5));
-          }
-        }
-        return ids;
+        return cells.map((c) => put(c.x + 0.5, c.y + 0.5));
       }
-      let x = opts.x;
-      let y = opts.y;
-      if (opts.at) {
-        const spot = resolveSpot(state, opts.at);
-        if (!spot) return null;
-        x = spot.x;
-        y = spot.y;
-      }
-      if (x === undefined || y === undefined) return null;
-      return put(x, y);
+      const picked = pickSpawnCell(state, cells);
+      if (!picked) return null;
+      return put(picked.x + 0.5, picked.y + 0.5);
     },
     remove: (name) => {
       const e = findNamed(state, name);

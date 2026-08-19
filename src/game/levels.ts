@@ -267,32 +267,32 @@ export function createNightVaultLevel(): GameLevel {
 
 ; Lock the doors. Tell the player the first job.
 (on start ()
-  (set-attr id: "door-cell" locked: true)
-  (set-attr id: "door-vault" locked: true)
-  (set-attr id: "door-exit" locked: true)
+  (set-attr "door-cell" [locked: true])
+  (set-attr "door-vault" [locked: true])
+  (set-attr "door-exit" [locked: true])
   (set "hits" 0)
   (announce "Cage locked. Shoot the fuse on the east wall."))
 
 ; A shot on the fuse opens the cage.
 (on shoot (target: "panel")
   (if not (get "freed")
-    (set-wall at: "panel" type: "empty")
-    (set-attr id: "door-cell" locked: false open: true)
+    (set-wall "panel" [type: "empty"])
+    (set-attr "door-cell" [locked: false open: true])
     (set "freed" true)
     (announce "Cage fried. Card is in the south locker.")))
 
 ; The card opens the vault and calls the warden.
 (on pickup (target: "key-card")
-  (set-attr id: "door-vault" locked: false)
+  (set-attr "door-vault" [locked: false])
   (announce "Vault lock dropped. Alarm!")
   (if not (get "sprung")
     (set "sprung" true)
-    (spawn type: "enemy" at: [11.5 6.5] id: "warden" variant: "bruiser")))
+    (spawn [11.5 6.5] "enemy" [id: "warden" variant: "bruiser"])))
 
 (on enter (zone: "ambush")
   (if not (get "add")
     (set "add" true)
-    (spawn type: "enemy" at: [9.5 6.5] id: "runner" variant: "grunt")
+    (spawn [9.5 6.5] "enemy" [id: "runner" variant: "grunt"])
     (announce "Movement in the hall!")))
 
 (on enter (zone: "pad-in")
@@ -306,7 +306,7 @@ export function createNightVaultLevel(): GameLevel {
 
 (on die (enemy: "warden")
   (after 1
-    (set-attr id: "door-exit" locked: false open: true)
+    (set-attr "door-exit" [locked: false open: true])
     (give "ammo" 20)
     (announce "Exit bolt released.")))
 
@@ -464,19 +464,19 @@ export function createDepthsLevel(): GameLevel {
       { x: 2, y: 21, w: 3, h: 1, id: "guard-spawn" },
     ],
     marks: [{ x: 9, y: 19, id: "server" }],
-    script: prettyScript(`(def explode (target:)
-  (set-wall at: target
-            type: "empty"
-            ceiling: "#ff0000"
-            floor: "#ff0000")
+    script: prettyScript(`(def explode (target)
+  (flash target
+         (spawn-fill target "pickup"
+               [color: "#ff7800" shape: "explosion"])))
+
+(def flash (place ids)
+  (set-wall place [type: "empty"
+                   ceiling: "#ff0000"
+                   floor: "#ff0000"])
   (let (merge (get-wall [0 0])
-              [explosion: (spawn at: target
-                                 fill: true
-                                 type: "pickup"
-                                 color: "#ff7800"
-                                 shape: "explosion")])
+              [explosion: ids])
     (after 0.2
-      (set-wall at: target ceiling: ceiling floor: floor)
+      (set-wall place [ceiling: ceiling floor: floor])
       (remove explosion))))
 
 (def teleport-guard (0))
@@ -489,14 +489,11 @@ export function createDepthsLevel(): GameLevel {
   (if not (get "spawned")
     (set "spawned" true)
     (say "You've activated my trap card!")
-    (set-wall at: "lair"
-              type: "empty"
-              ceiling: "#3584e4"
-              floor: "#63452c")
-    (spawn type: "enemy"
-           id: "guard"
-           at: "guard-spawn"
-           variant: "bruiser")
+    (set-wall "lair" [type: "empty"
+                      ceiling: "#3584e4"
+                      floor: "#63452c"])
+    (spawn "guard-spawn" "enemy"
+           [id: "guard" variant: "bruiser"])
     (teleport-guard 3)))
 
 (on die (enemy:)
@@ -504,13 +501,13 @@ export function createDepthsLevel(): GameLevel {
   (after 3
     (say "SYSTEM: Emergency override activated."))
   (after 6
-    (explode target: "seal")))
+    (explode "seal")))
 
 (on use (target: "activate-server")
-  (set-attr id: "activate-server" disabled: true)
-  (set-wall at: "server" color: "#ff0000")
+  (set-attr "activate-server" [disabled: true])
+  (set-wall "server" [color: "#ff0000"])
   (after 2
-    (explode target: "server")))
+    (explode "server")))
 `),
   });
   if (!result.ok) throw new Error(result.error);

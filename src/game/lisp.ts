@@ -106,6 +106,7 @@ export const BUILTINS = new Set([
   "set-wall",
   "get-wall",
   "spawn",
+  "spawn-fill",
   "remove",
   "teleport",
   "win",
@@ -165,15 +166,68 @@ function asIdList(v: LispVal): string[] {
   return [asName(v)];
 }
 
+function isPoint(v: LispVal): boolean {
+  return (
+    v.k === "list" &&
+    v.v.length === 2 &&
+    v.v[0]?.k === "num" &&
+    v.v[1]?.k === "num"
+  );
+}
+
 function asPlace(
   v: LispVal,
   ctx: string,
 ): { at: string } | { x: number; y: number } {
-  if (v.k === "list") {
-    if (v.v.length !== 2) throw new LispError(`${ctx} needs [x y]`);
-    return { x: asNum(v.v[0]!, ctx), y: asNum(v.v[1]!, ctx) };
+  if (isPoint(v) && v.k === "list") {
+    return { x: (v.v[0] as { k: "num"; v: number }).v, y: (v.v[1] as { k: "num"; v: number }).v };
   }
+  if (v.k === "list") throw new LispError(`${ctx} needs a name or [x y]`);
   return { at: asName(v) };
+}
+
+function asPlaces(
+  v: LispVal,
+  ctx: string,
+): ({ at: string } | { x: number; y: number })[] {
+  if (isPoint(v) || v.k !== "list") return [asPlace(v, ctx)];
+  if (!v.v.length) throw new LispError(`${ctx} needs a place`);
+  return v.v.map((item) => asPlace(item, ctx));
+}
+
+function optionalMap(
+  args: LispVal[],
+  start: number,
+  ctx: string,
+): Map<string, LispVal> {
+  if (args.length === start) return new Map();
+  if (args.length === start + 1) {
+    const m = args[start]!;
+    if (m.k !== "map") throw new LispError(`${ctx} needs a map of fields`);
+    return m.v;
+  }
+  throw new LispError(`${ctx} has too many arguments`);
+}
+
+function requireMap(
+  args: LispVal[],
+  start: number,
+  ctx: string,
+): Map<string, LispVal> {
+  if (args.length !== start + 1 || args[start]?.k !== "map") {
+    throw new LispError(`${ctx} needs a map of fields`);
+  }
+  return args[start]!.v;
+}
+
+function unknownKeys(
+  attrs: Map<string, LispVal>,
+  allowed: string[],
+  ctx: string,
+) {
+  for (const key of attrs.keys()) {
+    if (!allowed.includes(key)) throw new LispError(`${ctx}: unknown ${key}`);
+  }
 }
 
 function asSeq(v: LispVal, ctx: string): LispVal[] {
@@ -542,6 +596,18 @@ function suffixCmt(v: LispVal, text: string): string {
   return v.cmt ? `${text} ${v.cmt}` : text;
 }
 
+/** Shift continuation lines so a nested form keeps its own alignment. */
+function prefixLines(prefix: string, text: string): string {
+  const lines = text.split("\n");
+  if (lines.length <= 1) return prefix + text;
+  const pad = " ".repeat(prefix.length);
+  return prefix + lines[0] + "\n" + lines.slice(1).map((l) => pad + l).join("\n");
+}
+
+function pushPrefixed(lines: string[], prefix: string, text: string) {
+  lines.push(...prefixLines(prefix, text).split("\n"));
+}
+
 function formatVal(v: LispVal, indent: number): string {
   if (v.k === "comment") return v.v;
   if (v.k === "map") return formatMap(v, indent);
@@ -578,12 +644,11 @@ function closeOn(lines: string[], close = ")"): string {
 }
 
 function formatVecBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
-  const pad = "  ".repeat(indent);
-  const body = pad + "  ";
   if (!v.v.length) return "[]";
-  const lines = [`[${formatVal(v.v[0]!, indent)}`];
+  const lines: string[] = [];
+  pushPrefixed(lines, "[", formatVal(v.v[0]!, indent + 1));
   for (const item of v.v.slice(1)) {
-    lines.push(body + formatVal(item, indent + 1));
+    pushPrefixed(lines, "  ", formatVal(item, indent + 1));
   }
   return closeOn(lines, "]");
 }
@@ -591,12 +656,10 @@ function formatVecBlock(v: { k: "list"; v: LispVal[] }, indent: number): string 
 function formatMap(
   v: { k: "map"; v: Map<string, LispVal>; cmt?: string; broke?: boolean },
   indent: number,
-  keyPad?: string,
 ): string {
   if (v.v.size === 0) return suffixCmt(v, "[:]");
   const pairs = [...v.v.entries()];
-  const fmtPair = (k: string, val: LispVal) => `${k}: ${formatVal(val, indent)}`;
-  const inline = `[${pairs.map(([k, val]) => fmtPair(k, val)).join(" ")}]`;
+  const inline = `[${pairs.map(([k, val]) => `${k}: ${formatInline(val)}`).join(" ")}]`;
   const col = indent * 2;
   if (
     !hasBreakComment(v) &&
@@ -605,19 +668,18 @@ function formatMap(
   ) {
     return suffixCmt(v, inline);
   }
-  const pad = "  ".repeat(indent);
-  const extra = keyPad ?? "  ";
-  const [firstK, firstV] = pairs[0]!;
-  const lines = [`[${fmtPair(firstK, firstV)}`];
+  const pairText = (k: string, val: LispVal) =>
+    prefixLines(`${k}: `, formatVal(val, indent + 1));
+  const lines: string[] = [];
+  pushPrefixed(lines, "[", pairText(pairs[0]![0], pairs[0]![1]));
   for (const [k, val] of pairs.slice(1)) {
-    lines.push(pad + extra + fmtPair(k, val));
+    pushPrefixed(lines, " ", pairText(k, val));
   }
   return suffixCmt(v, closeOn(lines, "]"));
 }
 
 function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
-  const pad = "  ".repeat(indent);
-  const body = pad + "  ";
+  const body = "  ";
   const head = v.v[0]!;
   const headName = head.k === "sym" ? head.v : formatVal(head, indent);
 
@@ -628,7 +690,7 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     if (rest.length === 0) return `(on ${ev} ${params})`;
     const lines = [`(on ${ev} ${params}`];
     for (const item of rest) {
-      lines.push(body + formatVal(item, indent + 1));
+      pushPrefixed(lines, body, formatVal(item, indent + 1));
     }
     return closeOn(lines);
   }
@@ -643,7 +705,7 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     if (i >= v.v.length) return header + ")";
     const lines = [header];
     for (; i < v.v.length; i++) {
-      lines.push(body + formatVal(v.v[i]!, indent + 1));
+      pushPrefixed(lines, body, formatVal(v.v[i]!, indent + 1));
     }
     return closeOn(lines);
   }
@@ -655,25 +717,28 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
       clauses.forEach((c, i) => {
         if (i === 0) {
           const t = c.test ? formatVal(c.test, indent + 1) : "nil";
-          lines.push(`(if ${c.not ? "not " : ""}${t}`);
+          pushPrefixed(lines, `(if ${c.not ? "not " : ""}`, t);
         } else if (c.test) {
-          lines.push(
-            `${pad}else if ${c.not ? "not " : ""}${formatVal(c.test, indent + 1)}`,
+          pushPrefixed(
+            lines,
+            `else if ${c.not ? "not " : ""}`,
+            formatVal(c.test, indent + 1),
           );
         } else {
-          lines.push(`${pad}else`);
+          lines.push("else");
         }
         for (const item of c.body) {
-          lines.push(body + formatVal(item, indent + 1));
+          pushPrefixed(lines, body, formatVal(item, indent + 1));
         }
       });
       if (!lines.length) return "(if)";
       return closeOn(lines);
     } catch {
       const cond = v.v[1] ? formatVal(v.v[1], indent + 1) : "nil";
-      const lines = [`(if ${cond}`];
+      const lines: string[] = [];
+      pushPrefixed(lines, "(if ", cond);
       for (const item of v.v.slice(2)) {
-        lines.push(body + formatVal(item, indent + 1));
+        pushPrefixed(lines, body, formatVal(item, indent + 1));
       }
       return closeOn(lines);
     }
@@ -685,13 +750,15 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     if (rest.length >= 2 && rest[0]?.k === "list") {
       const lines = [`(def ${nm} ${formatInline(rest[0]!)}`];
       for (const item of rest.slice(1)) {
-        lines.push(body + formatVal(item, indent + 1));
+        pushPrefixed(lines, body, formatVal(item, indent + 1));
       }
       return closeOn(lines);
     }
     if (rest.length === 0) return `(def ${nm})`;
     const lines = [`(def ${nm}`];
-    for (const item of rest) lines.push(body + formatVal(item, indent + 1));
+    for (const item of rest) {
+      pushPrefixed(lines, body, formatVal(item, indent + 1));
+    }
     return closeOn(lines);
   }
 
@@ -700,29 +767,19 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     const rest = v.v.slice(2);
     if (rest.length === 0) return `(${headName}${sig})`;
     const lines = [`(${headName}${sig}`];
-    for (const item of rest) lines.push(body + formatVal(item, indent + 1));
-    return closeOn(lines);
-  }
-
-  if (headName === "if") {
-    const cond = v.v[1] ? formatVal(v.v[1], indent + 1) : "nil";
-    const thenPad = pad + "    ";
-    const lines = [`(if ${cond}`];
-    for (const item of v.v.slice(2)) {
-      lines.push(thenPad + formatVal(item, indent + 2));
+    for (const item of rest) {
+      pushPrefixed(lines, body, formatVal(item, indent + 1));
     }
     return closeOn(lines);
   }
 
   if (headName === "let") {
     const binds = v.v[1];
-    let bindStr = binds ? formatVal(binds, indent) : "[:]";
-    if (binds && binds.k === "map" && binds.v.size > 1) {
-      bindStr = formatMap(binds, indent, "     ");
-    }
-    const lines = [`(let ${bindStr}`];
+    const bindStr = binds ? formatVal(binds, indent + 1) : "[:]";
+    const lines: string[] = [];
+    pushPrefixed(lines, "(let ", bindStr);
     for (const item of v.v.slice(2)) {
-      lines.push(body + formatVal(item, indent + 1));
+      pushPrefixed(lines, body, formatVal(item, indent + 1));
     }
     return closeOn(lines);
   }
@@ -730,11 +787,12 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
   if (headName === "pipe") {
     const rest = v.v.slice(1);
     if (rest.length === 0) return "(pipe)";
-    const first = formatVal(rest[0]!, indent);
-    if (rest.length === 1) return `(pipe ${first})`;
-    const lines = [`(pipe ${first}`];
+    const first = formatVal(rest[0]!, indent + 1);
+    if (rest.length === 1) return prefixLines("(pipe ", first) + ")";
+    const lines: string[] = [];
+    pushPrefixed(lines, "(pipe ", first);
     for (const item of rest.slice(1)) {
-      lines.push(body + formatVal(item, indent + 1));
+      pushPrefixed(lines, body, formatVal(item, indent + 1));
     }
     return closeOn(lines);
   }
@@ -753,13 +811,22 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
       i += 1;
     }
   }
-  const fmtChunk = (c: LispVal[]) =>
-    c.map((x) => formatVal(x, indent)).join(" ");
-  const fnW = headName.length;
-  const argPad = pad + " ".repeat(fnW + 2);
-  const lines = [`(${headName} ${fmtChunk(chunks[0]!)}`];
+  const fmtChunk = (c: LispVal[]) => {
+    if (
+      c.length === 2 &&
+      c[0]!.k === "sym" &&
+      c[0]!.v.endsWith(":")
+    ) {
+      return prefixLines(`${c[0]!.v} `, formatVal(c[1]!, indent + 1));
+    }
+    if (c.length === 1) return formatVal(c[0]!, indent + 1);
+    return c.map((x) => formatVal(x, indent + 1)).join(" ");
+  };
+  const argPad = " ".repeat(headName.length + 2);
+  const lines: string[] = [];
+  pushPrefixed(lines, `(${headName} `, fmtChunk(chunks[0]!));
   for (const c of chunks.slice(1)) {
-    lines.push(argPad + fmtChunk(c));
+    pushPrefixed(lines, argPad, fmtChunk(c));
   }
   return closeOn(lines);
 }
@@ -849,9 +916,8 @@ export type Host = {
   ) => LispVal | undefined;
   spawn: (opts: {
     type: string;
-    at?: string;
-    x?: number;
-    y?: number;
+    places: ({ at: string } | { x: number; y: number })[];
+    fill?: boolean;
     id?: string;
     variant?: string;
     dest?: string;
@@ -859,7 +925,6 @@ export type Host = {
     color?: number;
     locked?: boolean;
     disabled?: boolean;
-    fill?: boolean;
     shape?: string;
   }) => string | string[] | null;
   remove: (name: string) => boolean;
@@ -1393,12 +1458,66 @@ function callPos(fn: LispVal, args: LispVal[], ctx: Ctx): LispVal {
   return applyFn(fn, { pos: args, keys: new Map() }, makeEnv(null), ctx);
 }
 
+function parseThingAttrs(
+  kind: string,
+  attrs: Map<string, LispVal>,
+  ctx: string,
+): {
+  id?: string;
+  variant?: string;
+  dest?: string;
+  label?: string;
+  color?: number;
+  locked?: boolean;
+  disabled?: boolean;
+  shape?: string;
+} {
+  unknownKeys(
+    attrs,
+    ["id", "variant", "dest", "label", "color", "locked", "disabled", "shape"],
+    ctx,
+  );
+  const variant = attrs.get("variant");
+  const dest = attrs.get("dest");
+  const label = attrs.get("label");
+  const color = attrs.get("color");
+  const locked = attrs.get("locked");
+  const disabled = attrs.get("disabled");
+  const shape = attrs.get("shape");
+  const id = attrs.get("id");
+  if (variant && kind !== "enemy") {
+    throw new LispError("variant is only for enemy");
+  }
+  if (dest && kind !== "teleport") {
+    throw new LispError("dest is only for teleport");
+  }
+  if ((label || color || shape) && kind !== "pickup") {
+    throw new LispError("label, color, and shape are only for pickup");
+  }
+  if (locked && kind !== "door") {
+    throw new LispError("locked is only for door");
+  }
+  if (disabled && kind !== "button") {
+    throw new LispError("disabled is only for button");
+  }
+  if (shape && parsePickupShape(asName(shape)) === null) {
+    throw new LispError(`unknown shape: ${asName(shape)}`);
+  }
+  return {
+    id: id ? asName(id) : undefined,
+    variant: variant ? asName(variant) : undefined,
+    dest: dest ? asName(dest) : undefined,
+    label: label ? asName(label) : undefined,
+    color: color ? asColor(color, "color") : undefined,
+    locked: locked ? truthy(locked) : undefined,
+    disabled: disabled ? truthy(disabled) : undefined,
+    shape: shape ? asName(shape) : undefined,
+  };
+}
+
 function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
   const h = ctx.host;
-  const args =
-    name === "spawn" || name === "set-wall" || name === "set-attr"
-      ? call.pos
-      : posArgs(name, call);
+  const args = posArgs(name, call);
   const nums = () => args.map((a) => asNum(a, name));
   switch (name) {
     case "+":
@@ -1581,38 +1700,26 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       h.say(args.map(printVal).join(""));
       return nil();
     case "set-attr": {
-      if (call.pos.length) throw new LispError("set-attr needs keys");
-      const allowed = [
-        "id",
-        "locked",
-        "open",
-        "disabled",
-        "dest",
-        "label",
-        "color",
-        "variant",
-        "shape",
-      ];
-      for (const key of call.keys.keys()) {
-        if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
-      }
-      const id = call.keys.get("id");
-      if (!id) throw new LispError("set-attr needs id:");
+      if (args.length < 1) throw new LispError("set-attr needs an id");
+      const attrs = requireMap(args, 1, "set-attr");
+      unknownKeys(
+        attrs,
+        ["locked", "open", "disabled", "dest", "label", "color", "variant", "shape"],
+        "set-attr",
+      );
       const patch: AttrPatch = {};
-      if (call.keys.has("locked")) patch.locked = truthy(call.keys.get("locked")!);
-      if (call.keys.has("open")) patch.open = truthy(call.keys.get("open")!);
-      if (call.keys.has("disabled")) {
-        patch.disabled = truthy(call.keys.get("disabled")!);
-      }
-      const dest = call.keys.get("dest");
+      if (attrs.has("locked")) patch.locked = truthy(attrs.get("locked")!);
+      if (attrs.has("open")) patch.open = truthy(attrs.get("open")!);
+      if (attrs.has("disabled")) patch.disabled = truthy(attrs.get("disabled")!);
+      const dest = attrs.get("dest");
       if (dest) patch.dest = asName(dest);
-      const label = call.keys.get("label");
+      const label = attrs.get("label");
       if (label) patch.label = asName(label);
-      const color = call.keys.get("color");
+      const color = attrs.get("color");
       if (color) patch.color = asColor(color, "color");
-      const variant = call.keys.get("variant");
+      const variant = attrs.get("variant");
       if (variant) patch.variant = asName(variant);
-      const shape = call.keys.get("shape");
+      const shape = attrs.get("shape");
       if (shape) {
         const parsed = parsePickupShape(asName(shape));
         if (!parsed) throw new LispError(`unknown shape: ${asName(shape)}`);
@@ -1628,10 +1735,10 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         !variant &&
         !shape
       ) {
-        throw new LispError("set-attr needs an attribute");
+        throw new LispError("set-attr needs a field");
       }
       let ok = true;
-      for (const name of asIdList(id)) {
+      for (const name of asIdList(args[0]!)) {
         if (!h.setAttr(name, patch)) ok = false;
       }
       return bool(ok);
@@ -1658,32 +1765,34 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       return h.getAttr(asName(args[0]!), attr) ?? nil();
     }
     case "set-wall": {
-      if (call.pos.length) {
-        throw new LispError("set-wall needs keys");
-      }
-      const allowed = ["at", "type", "color", "floor", "ceiling"];
-      for (const key of call.keys.keys()) {
-        if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
-      }
-      const at = call.keys.get("at");
-      if (!at) throw new LispError("set-wall needs at:");
-      const type = call.keys.get("type");
+      if (args.length < 1) throw new LispError("set-wall needs a place");
+      const attrs = requireMap(args, 1, "set-wall");
+      unknownKeys(attrs, ["type", "color", "floor", "ceiling"], "set-wall");
+      const type = attrs.get("type");
       if (type && texFromWallName(asName(type)) === null) {
         throw new LispError(`unknown type: ${asName(type)}`);
       }
-      const color = call.keys.get("color");
-      const floor = call.keys.get("floor");
-      const ceiling = call.keys.get("ceiling");
-      const place = asPlace(at, "set-wall");
-      return bool(
-        h.setWall({
-          ...place,
-          type: type ? asName(type) : undefined,
-          color: color ? asColor(color, "color") : undefined,
-          floor: floor ? asColor(floor, "floor") : undefined,
-          ceiling: ceiling ? asColor(ceiling, "ceiling") : undefined,
-        }),
-      );
+      const color = attrs.get("color");
+      const floor = attrs.get("floor");
+      const ceiling = attrs.get("ceiling");
+      if (!type && !color && !floor && !ceiling) {
+        throw new LispError("set-wall needs a field");
+      }
+      let ok = true;
+      for (const place of asPlaces(args[0]!, "set-wall")) {
+        if (
+          !h.setWall({
+            ...place,
+            type: type ? asName(type) : undefined,
+            color: color ? asColor(color, "color") : undefined,
+            floor: floor ? asColor(floor, "floor") : undefined,
+            ceiling: ceiling ? asColor(ceiling, "ceiling") : undefined,
+          })
+        ) {
+          ok = false;
+        }
+      }
+      return bool(ok);
     }
     case "get-wall": {
       if (args.length === 1) {
@@ -1699,75 +1808,30 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       return h.getWall(asPlace(args[0]!, "get-wall"), attr) ?? nil();
     }
     case "spawn": {
-      if (call.pos.length) {
-        throw new LispError("spawn needs keys");
-      }
-      const allowed = [
-        "type",
-        "at",
-        "id",
-        "variant",
-        "dest",
-        "label",
-        "color",
-        "locked",
-        "disabled",
-        "fill",
-        "shape",
-      ];
-      for (const key of call.keys.keys()) {
-        if (!allowed.includes(key)) throw new LispError(`unknown ${key}:`);
-      }
-      const type = call.keys.get("type");
-      const at = call.keys.get("at");
-      if (!type) throw new LispError("spawn needs type:");
-      if (!at) throw new LispError("spawn needs at:");
-      const kind = asName(type);
-      const variant = call.keys.get("variant");
-      const dest = call.keys.get("dest");
-      const label = call.keys.get("label");
-      const color = call.keys.get("color");
-      const locked = call.keys.get("locked");
-      const disabled = call.keys.get("disabled");
-      const shape = call.keys.get("shape");
-      if (variant && kind !== "enemy") {
-        throw new LispError("variant: is only for enemy");
-      }
-      if (dest && kind !== "teleport") {
-        throw new LispError("dest: is only for teleport");
-      }
-      if ((label || color || shape) && kind !== "pickup") {
-        throw new LispError("label:, color:, and shape: are only for pickup");
-      }
-      if (locked && kind !== "door") {
-        throw new LispError("locked: is only for door");
-      }
-      if (disabled && kind !== "button") {
-        throw new LispError("disabled: is only for button");
-      }
-      if (shape && parsePickupShape(asName(shape)) === null) {
-        throw new LispError(`unknown shape: ${asName(shape)}`);
-      }
-      const publicId = call.keys.get("id");
-      const fill = call.keys.has("fill") && truthy(call.keys.get("fill")!);
-      const place = asPlace(at, "spawn");
-      if (fill && !("at" in place)) throw new LispError("fill: needs a name");
+      if (args.length < 2) throw new LispError("spawn needs a place and a type");
+      const kind = asName(args[1]!);
+      const attrs = optionalMap(args, 2, "spawn");
       const made = h.spawn({
         type: kind,
-        ...place,
-        id: publicId ? asName(publicId) : undefined,
-        variant: variant ? asName(variant) : undefined,
-        dest: dest ? asName(dest) : undefined,
-        label: label ? asName(label) : undefined,
-        color: color ? asColor(color, "color") : undefined,
-        locked: locked ? truthy(locked) : undefined,
-        disabled: disabled ? truthy(disabled) : undefined,
-        fill,
-        shape: shape ? asName(shape) : undefined,
+        places: asPlaces(args[0]!, "spawn"),
+        ...parseThingAttrs(kind, attrs, "spawn"),
       });
-      if (made === null) throw new LispError("spawn at: not found");
-      if (Array.isArray(made)) return list(made.map(str), true);
+      if (typeof made !== "string") throw new LispError("spawn place not found");
       return str(made);
+    }
+    case "spawn-fill": {
+      if (args.length < 2) throw new LispError("spawn-fill needs a place and a type");
+      const kind = asName(args[1]!);
+      const attrs = optionalMap(args, 2, "spawn-fill");
+      const made = h.spawn({
+        type: kind,
+        places: asPlaces(args[0]!, "spawn-fill"),
+        fill: true,
+        ...parseThingAttrs(kind, attrs, "spawn-fill"),
+      });
+      if (made === null) throw new LispError("spawn-fill place not found");
+      if (Array.isArray(made)) return list(made.map(str), true);
+      return list([str(made)], true);
     }
     case "remove": {
       let ok = true;
