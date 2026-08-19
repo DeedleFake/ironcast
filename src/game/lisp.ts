@@ -53,6 +53,7 @@ export const KEYWORDS = new Set([
   "quote",
   "on",
   "after",
+  "pipe",
 ]);
 
 export const BUILTINS = new Set([
@@ -79,6 +80,13 @@ export const BUILTINS = new Set([
   "rest",
   "nth",
   "append",
+  "map",
+  "filter",
+  "reduce",
+  "pairs",
+  "from-pairs",
+  "keys",
+  "vals",
   "empty?",
   "list?",
   "map?",
@@ -166,6 +174,23 @@ function asPlace(
     return { x: asNum(v.v[0]!, ctx), y: asNum(v.v[1]!, ctx) };
   }
   return { at: asName(v) };
+}
+
+function asSeq(v: LispVal, ctx: string): LispVal[] {
+  if (v.k === "list") return v.v;
+  if (v.k === "map") {
+    return [...v.v.entries()].map(([k, val]) => list([str(k), val], true));
+  }
+  throw new LispError(`${ctx} needs a list or a map`);
+}
+
+function asPair(v: LispVal, ctx: string): [string, LispVal] {
+  if (v.k !== "list" || v.v.length !== 2) {
+    throw new LispError(`${ctx} needs ["key" value] pairs`);
+  }
+  const key = v.v[0]!;
+  if (key.k !== "str") throw new LispError(`${ctx} needs string keys`);
+  return [key.v, v.v[1]!];
 }
 
 export function asColor(v: LispVal, ctx: string): number {
@@ -440,6 +465,7 @@ const BODY_SPECIALS = new Set([
   "let",
   "if",
   "after",
+  "pipe",
 ]);
 
 type IfClause = { test: LispVal | null; not: boolean; body: LispVal[] };
@@ -696,6 +722,18 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     }
     const lines = [`(let ${bindStr}`];
     for (const item of v.v.slice(2)) {
+      lines.push(body + formatVal(item, indent + 1));
+    }
+    return closeOn(lines);
+  }
+
+  if (headName === "pipe") {
+    const rest = v.v.slice(1);
+    if (rest.length === 0) return "(pipe)";
+    const first = formatVal(rest[0]!, indent);
+    if (rest.length === 1) return `(pipe ${first})`;
+    const lines = [`(pipe ${first}`];
+    for (const item of rest.slice(1)) {
       lines.push(body + formatVal(item, indent + 1));
     }
     return closeOn(lines);
@@ -1227,6 +1265,8 @@ function special(
       return makeFn(args, env);
     case "let":
       return evalLet(args, env, ctx);
+    case "pipe":
+      return evalPipe(args, env, ctx);
     case "after": {
       const sec = asNum(evalVal(args[0] ?? num(0), env, ctx), "after");
       const body = args.slice(1);
@@ -1284,6 +1324,36 @@ function evalLet(args: LispVal[], env: Env, ctx: Ctx): LispVal {
   return last;
 }
 
+function quotedVal(v: LispVal): LispVal {
+  return list([sym("quote"), v]);
+}
+
+function pipeStepForm(step: LispVal, cur: LispVal): LispVal {
+  const q = quotedVal(cur);
+  if (step.k === "sym") return list([step, q]);
+  if (step.k !== "list" || step.vec) {
+    throw new LispError("pipe step must be a call or a name");
+  }
+  const xs = step.v.filter((x) => x.k !== "comment");
+  if (!xs.length) throw new LispError("pipe step must be a call or a name");
+  for (const a of xs.slice(1)) {
+    if (isKeySym(a)) throw new LispError("pipe steps cannot use name: arguments");
+  }
+  return list([xs[0]!, q, ...xs.slice(1)]);
+}
+
+function evalPipe(args: LispVal[], env: Env, ctx: Ctx): LispVal {
+  const steps = args.filter((a) => a.k !== "comment");
+  if (steps.length < 2) {
+    throw new LispError("pipe needs a value and at least one step");
+  }
+  let cur = evalVal(steps[0]!, env, ctx);
+  for (const step of steps.slice(1)) {
+    cur = evalVal(pipeStepForm(step, cur), env, ctx);
+  }
+  return cur;
+}
+
 function applyFn(fn: LispVal, call: CallParts, env: Env, ctx: Ctx): LispVal {
   if (fn.k === "fn") {
     if (fn.keys.length) {
@@ -1317,6 +1387,10 @@ function posArgs(name: string, call: CallParts): LispVal[] {
     throw new LispError(`${name} does not take keyword arguments`);
   }
   return call.pos;
+}
+
+function callPos(fn: LispVal, args: LispVal[], ctx: Ctx): LispVal {
+  return applyFn(fn, { pos: args, keys: new Map() }, makeEnv(null), ctx);
 }
 
 function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
@@ -1366,7 +1440,8 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       const a = args[0];
       if (a?.k === "str") return num(a.v.length);
       if (a?.k === "list") return num(a.v.length);
-      throw new LispError("len needs a string or list");
+      if (a?.k === "map") return num(a.v.size);
+      throw new LispError("len needs a string, a list, or a map");
     }
     case "cons":
       if (args[1]?.k === "list") return list([args[0]!, ...args[1].v]);
@@ -1389,6 +1464,63 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
         else out.push(a);
       }
       return list(out);
+    }
+    case "map": {
+      if (args.length < 2) throw new LispError("map needs a list or map, and a function");
+      const f = args[1]!;
+      return list(
+        asSeq(args[0]!, "map").map((item) => callPos(f, [item], ctx)),
+        true,
+      );
+    }
+    case "filter": {
+      if (args.length < 2) throw new LispError("filter needs a list or map, and a function");
+      const f = args[1]!;
+      return list(
+        asSeq(args[0]!, "filter").filter((item) =>
+          truthy(callPos(f, [item], ctx)),
+        ),
+        true,
+      );
+    }
+    case "reduce": {
+      if (args.length < 3) {
+        throw new LispError("reduce needs a list or map, an init, and a function");
+      }
+      const f = args[2]!;
+      let acc = args[1]!;
+      for (const item of asSeq(args[0]!, "reduce")) {
+        acc = callPos(f, [acc, item], ctx);
+      }
+      return acc;
+    }
+    case "pairs": {
+      const m = args[0];
+      if (!m || m.k !== "map") throw new LispError("pairs needs a map");
+      return list(
+        [...m.v.entries()].map(([k, val]) => list([str(k), val], true)),
+        true,
+      );
+    }
+    case "from-pairs": {
+      const xs = args[0];
+      if (!xs || xs.k !== "list") throw new LispError("from-pairs needs a list");
+      const out = new Map<string, LispVal>();
+      for (const p of xs.v) {
+        const [k, val] = asPair(p, "from-pairs");
+        out.set(k, val);
+      }
+      return { k: "map", v: out };
+    }
+    case "keys": {
+      const m = args[0];
+      if (!m || m.k !== "map") throw new LispError("keys needs a map");
+      return list([...m.v.keys()].map(str), true);
+    }
+    case "vals": {
+      const m = args[0];
+      if (!m || m.k !== "map") throw new LispError("vals needs a map");
+      return list([...m.v.values()], true);
     }
     case "empty?":
       return bool(

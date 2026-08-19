@@ -465,6 +465,37 @@ else
         </p>
       </Block>
       <Block>
+        <H>pipe</H>
+        <p>
+          <Code>pipe</Code> sends a value through a list of calls. The
+          value becomes the first argument of the next call. Then that
+          result becomes the first argument of the call after that.
+        </p>
+        <p>
+          <Code>(pipe xs first)</Code> is the same as{" "}
+          <Code>(first xs)</Code>. A name with no extra arguments is a
+          call of one argument.
+        </p>
+        <p>
+          <Code>(pipe xs (nth 0) rest)</Code> is the same as{" "}
+          <Code>(rest (nth xs 0))</Code>.
+        </p>
+        <p>
+          <Code>map</Code>, <Code>filter</Code>, and <Code>reduce</Code>{" "}
+          take the list first, so they work in <Code>pipe</Code>:
+        </p>
+        <pre className="overflow-x-auto rounded-md bg-[#0e0e12] p-3 font-mono text-xs leading-5 text-fg">
+          {`(pipe xs
+  (map (fn (v) (* v 2)))
+  (reduce 0 (fn (acc cur) (+ acc cur))))`}
+        </pre>
+        <p>
+          A step must be a call or a name. A step cannot use{" "}
+          <Code>name:</Code> arguments. <Code>pipe</Code> needs a value
+          and at least one step.
+        </p>
+      </Block>
+      <Block>
         <H>def</H>
         <p>
           <Code>(def announce (msg) ...)</Code> makes a function. The form
@@ -617,8 +648,8 @@ function Builtins() {
             <Code>(str a b ...)</Code> joins values into one string.
           </li>
           <li>
-            <Code>(len x)</Code> counts characters in a string or items in a
-            list.
+            <Code>(len x)</Code> counts characters in a string, items in a
+            list, or keys in a map.
           </li>
           <li>
             <Code>[a b ...]</Code> makes a list of the values.
@@ -645,6 +676,64 @@ function Builtins() {
           </li>
           <li>
             <Code>(append a b ...)</Code> joins lists into one list.
+          </li>
+        </ul>
+      </Block>
+      <Block>
+        <H>map, filter, reduce</H>
+        <p>
+          These walk a list from the first item to the last. A map is
+          walked as <Code>["key" value]</Code> pairs.{" "}
+          <Code>map</Code> and <Code>filter</Code> always return a list.
+        </p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <Code>(map xs f)</Code> calls <Code>f</Code> on each item. The
+            result is a list of those return values.
+          </li>
+          <li>
+            <Code>(filter xs f)</Code> keeps the items for which{" "}
+            <Code>f</Code> is true.
+          </li>
+          <li>
+            <Code>(reduce xs init f)</Code> starts with{" "}
+            <Code>init</Code>. For each item, it calls <Code>f</Code> with
+            the last result and the current item. That return value is the
+            last result for the next item. An empty list returns{" "}
+            <Code>init</Code>.
+          </li>
+        </ul>
+        <p>Example:</p>
+        <pre className="overflow-x-auto rounded-md bg-[#0e0e12] p-3 font-mono text-xs leading-5 text-fg">
+          {`(reduce [1 2 3] 0 (fn (acc cur) (- acc cur)))
+; is ((0 - 1) - 2) - 3, so -6`}
+        </pre>
+        <p>
+          With <Code>pipe</Code>:
+        </p>
+        <pre className="overflow-x-auto rounded-md bg-[#0e0e12] p-3 font-mono text-xs leading-5 text-fg">
+          {`(pipe [1 2 3 4]
+  (map (fn (v) (* v 2)))
+  (filter (fn (v) (> v 4)))
+  (reduce 0 (fn (acc cur) (+ acc cur))))
+; 6 + 8, so 14`}
+        </pre>
+      </Block>
+      <Block>
+        <H>pairs, from-pairs, keys, vals</H>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <Code>(pairs m)</Code> is a list of{" "}
+            <Code>["key" value]</Code> pairs, in insert order.
+          </li>
+          <li>
+            <Code>(from-pairs xs)</Code> builds a map from that list. A
+            later pair wins on the same key. Each item must be a pair. Each
+            key must be a string.
+          </li>
+          <li>
+            <Code>(keys m)</Code> is the list of keys.{" "}
+            <Code>(vals m)</Code> is the list of values.
           </li>
         </ul>
       </Block>
