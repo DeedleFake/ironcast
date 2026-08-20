@@ -40,6 +40,7 @@ import {
   str,
   bool,
   mapFrom,
+  LispError,
   type Env,
   type Host,
   type LispVal,
@@ -355,6 +356,55 @@ function findMark(state: GameState, name: string) {
 function findZone(state: GameState, name: string) {
   if (!name) return undefined;
   return (state.level.zones ?? []).find((z) => z.id === name);
+}
+
+function cellsAt(
+  state: GameState,
+  loc: { at: string } | { x: number; y: number },
+): { x: number; y: number }[] {
+  if ("at" in loc) {
+    const mark = findMark(state, loc.at);
+    if (mark) return [{ x: mark.x, y: mark.y }];
+    const named = findNamed(state, loc.at);
+    if (named) return [{ x: Math.floor(named.x), y: Math.floor(named.y) }];
+    const zone = findZone(state, loc.at);
+    if (!zone) return [];
+    const cells: { x: number; y: number }[] = [];
+    const x1 = Math.min(state.level.width, zone.x + zone.w);
+    const y1 = Math.min(state.level.height, zone.y + zone.h);
+    for (let y = Math.max(0, zone.y); y < y1; y++) {
+      for (let x = Math.max(0, zone.x); x < x1; x++) {
+        cells.push({ x, y });
+      }
+    }
+    return cells;
+  }
+  return [{ x: Math.floor(loc.x), y: Math.floor(loc.y) }];
+}
+
+function wallFields(
+  state: GameState,
+  x: number,
+  y: number,
+): { type: LispVal; color: LispVal; floor: LispVal; ceiling: LispVal } | undefined {
+  const level = state.level;
+  if (x < 0 || y < 0 || x >= level.width || y >= level.height) return undefined;
+  const tex = level.walls[y]?.[x] ?? 0;
+  return {
+    type: str(wallNameFromTex(tex)),
+    color:
+      tex === 0
+        ? nil()
+        : str(hexFromColor(level.wallColors?.[y]?.[x] || defaultWallColor(tex))),
+    floor: str(hexFromColor(level.floors?.[y]?.[x] ?? DEFAULT_FLOOR)),
+    ceiling: str(hexFromColor(level.ceils?.[y]?.[x] ?? DEFAULT_CEIL)),
+  };
+}
+
+function sameWallField(a: LispVal, b: LispVal): boolean {
+  if (a.k === "nil" && b.k === "nil") return true;
+  if (a.k === "str" && b.k === "str") return a.v === b.v;
+  return false;
 }
 
 function cellBusy(state: GameState, x: number, y: number): boolean {
@@ -942,27 +992,14 @@ function makeHost(state: GameState): Host {
       return entityAttrMap(e);
     },
     setWall: (opts) => {
-      const cells: { x: number; y: number }[] = [];
-      if (opts.at) {
-        const mark = findMark(state, opts.at);
-        const door = findNamed(state, opts.at);
-        const zone = findZone(state, opts.at);
-        if (mark) {
-          cells.push({ x: mark.x, y: mark.y });
-        } else if (door) {
-          cells.push({ x: Math.floor(door.x), y: Math.floor(door.y) });
-        } else if (zone) {
-          const x1 = Math.min(state.level.width, zone.x + zone.w);
-          const y1 = Math.min(state.level.height, zone.y + zone.h);
-          for (let y = Math.max(0, zone.y); y < y1; y++) {
-            for (let x = Math.max(0, zone.x); x < x1; x++) {
-              cells.push({ x, y });
-            }
-          }
-        } else return false;
-      } else if (opts.x !== undefined && opts.y !== undefined) {
-        cells.push({ x: Math.floor(opts.x), y: Math.floor(opts.y) });
-      } else return false;
+      const loc =
+        opts.at !== undefined
+          ? { at: opts.at }
+          : opts.x !== undefined && opts.y !== undefined
+            ? { x: opts.x, y: opts.y }
+            : null;
+      if (!loc) return false;
+      const cells = cellsAt(state, loc);
       if (!cells.length) return false;
       const level = state.level;
       if (!level.floors) level.floors = colorGrid(level.width, level.height, DEFAULT_FLOOR);
@@ -994,45 +1031,34 @@ function makeHost(state: GameState): Host {
       return any;
     },
     getWall: (loc, attr) => {
-      let x: number;
-      let y: number;
-      if ("at" in loc) {
-        const mark = findMark(state, loc.at);
-        const named = findNamed(state, loc.at);
-        if (mark) {
-          x = mark.x;
-          y = mark.y;
-        } else if (named) {
-          x = Math.floor(named.x);
-          y = Math.floor(named.y);
-        } else return undefined;
-      } else {
-        x = Math.floor(loc.x);
-        y = Math.floor(loc.y);
+      const cells = cellsAt(state, loc);
+      const samples = cells
+        .map((c) => wallFields(state, c.x, c.y))
+        .filter((s): s is NonNullable<typeof s> => !!s);
+      if (!samples.length) return undefined;
+      const first = samples[0]!;
+      for (const s of samples.slice(1)) {
+        if (
+          !sameWallField(first.type, s.type) ||
+          !sameWallField(first.color, s.color) ||
+          !sameWallField(first.floor, s.floor) ||
+          !sameWallField(first.ceiling, s.ceiling)
+        ) {
+          throw new LispError("get-wall: walls do not match");
+        }
       }
-      const level = state.level;
-      if (x < 0 || y < 0 || x >= level.width || y >= level.height) {
-        return undefined;
-      }
-      const tex = level.walls[y]?.[x] ?? 0;
-      const color =
-        tex === 0
-          ? nil()
-          : str(hexFromColor(level.wallColors?.[y]?.[x] || defaultWallColor(tex)));
-      const floor = str(hexFromColor(level.floors?.[y]?.[x] ?? DEFAULT_FLOOR));
-      const ceiling = str(hexFromColor(level.ceils?.[y]?.[x] ?? DEFAULT_CEIL));
       if (!attr) {
         return mapFrom([
-          ["type", str(wallNameFromTex(tex))],
-          ["color", color],
-          ["floor", floor],
-          ["ceiling", ceiling],
+          ["type", first.type],
+          ["color", first.color],
+          ["floor", first.floor],
+          ["ceiling", first.ceiling],
         ]);
       }
-      if (attr === "type") return str(wallNameFromTex(tex));
-      if (attr === "color") return color;
-      if (attr === "floor") return floor;
-      if (attr === "ceiling") return ceiling;
+      if (attr === "type") return first.type;
+      if (attr === "color") return first.color;
+      if (attr === "floor") return first.floor;
+      if (attr === "ceiling") return first.ceiling;
       return nil();
     },
     spawn: (opts) => {

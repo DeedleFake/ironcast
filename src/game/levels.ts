@@ -307,11 +307,11 @@ export function createNightVaultLevel(): GameLevel {
 (on die (enemy: "warden")
   (after 1
     (set-attr "door-exit" [locked: false open: true])
-    (update-attr "player" "ammo" (fn (n) (+ n 20)))
+    (update-attr "player" "ammo" (fn + #1 20))
     (announce "Exit bolt released.")))
 
 (on hurt (target: "player")
-  (set-prop "hits" (+ (get-prop "hits") 1))
+  (update-prop "hits" (fn + #1 1))
   (if (>= (get-prop "hits") 3)
     (if not (get-prop "warned")
       (set-prop "warned" true)
@@ -470,11 +470,11 @@ export function createDepthsLevel(): GameLevel {
                [color: "#ff7800" shape: "explosion"])))
 
 (def flash (place ids)
-  (set-wall place [type: "empty"
-                   ceiling: "#ff0000"
-                   floor: "#ff0000"])
-  (let (merge (get-wall [0 0])
+  (let (merge (get-wall place)
               [explosion: ids])
+    (set-wall place [type: "empty"
+                     ceiling: "#ff0000"
+                     floor: "#ff0000"])
     (after 0.2
       (set-wall place [ceiling: ceiling floor: floor])
       (remove explosion))))

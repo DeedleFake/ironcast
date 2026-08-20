@@ -7,6 +7,7 @@ import {
   type LispVal,
   type Params,
   parseCallRaw,
+  parseFn,
   parseIfArgs,
   parseLisp,
   parseParams,
@@ -444,6 +445,20 @@ function typeMapSet(m: Type, keys: string[], val: Type): Type {
   return setAt(m, 0);
 }
 
+function propLeafType(writes: Type[], rest: string[]): Type {
+  if (!rest.length) {
+    return writes.length ? tDyn(tOr([...writes, tNil])) : tNil;
+  }
+  if (!writes.length) return tNil;
+  return tDyn(tOr([...writes.map((w) => typeMapGet(w, rest)), tNil]));
+}
+
+function propWriteType(writes: Type[], rest: string[], val: Type): Type {
+  if (!rest.length) return val;
+  const bases = writes.length ? writes : [tEmptyMap];
+  return tOr(bases.map((b) => typeMapSet(b, rest, val)));
+}
+
 function playerMapType(): Type {
   return tMap(
     new Map([
@@ -857,15 +872,13 @@ class Checker {
   }
 
   typeFn(args: LispVal[], env: Env, form: LispVal): Type {
-    if (!args[0] || args[0].k !== "list") {
-      this.err(form, "(fn (args...) body)");
-      return tDyn(tAny);
-    }
     try {
-      const params = parseParams(args[0], "fn");
+      const parsed = parseFn(args);
       return {
         k: "fn",
-        arrows: [this.typeClause(params, args.slice(1), env, args[0])],
+        arrows: parsed.clauses.map((c) =>
+          this.typeClause(c.params, c.body, env, c.paramsForm),
+        ),
       };
     } catch (e) {
       this.err(form, e instanceof Error ? e.message : "bad fn");
@@ -1266,25 +1279,26 @@ class Checker {
         return typeMapSet(pos[0]!, keys, ret);
       }
       case "get-prop": {
-        const key = unwrap(pos[0] ?? tNil);
-        if (key.k === "str" && key.v !== undefined) {
-          const writes = this.props.get(key.v) ?? [];
-          if (!writes.length) return tNil;
-          return tDyn(tOr([...writes, tNil]));
-        }
-        return tDyn(tAny);
+        this.expect(pos[0] ?? tNil, pathWant(), raw?.[0] ?? form, "get-prop");
+        const keys = pathKeys(pos[0] ?? tNil);
+        if (keys === null) return tNil;
+        if (keys === "unknown") return tDyn(tAny);
+        return propLeafType(this.props.get(keys[0]!) ?? [], keys.slice(1));
       }
       case "set-prop": {
-        const key = unwrap(pos[0] ?? tNil);
+        this.expect(pos[0] ?? tNil, pathWant(), raw?.[0] ?? form, "set-prop");
         const val = pos[1] ?? tNil;
-        if (key.k === "str" && key.v !== undefined && this.pass === 0) {
-          const list = this.props.get(key.v) ?? [];
-          list.push(val);
-          this.props.set(key.v, list);
+        const keys = pathKeys(pos[0] ?? tNil);
+        if (keys && keys !== "unknown" && this.pass === 0) {
+          const root = keys[0]!;
+          const list = this.props.get(root) ?? [];
+          list.push(propWriteType(list, keys.slice(1), val));
+          this.props.set(root, list);
         }
-        namesh(0);
         return val;
       }
+      case "update-prop":
+        return this.typeUpdateProp(pos, form, raw);
       case "merge": {
         let acc: Type = tEmptyMap;
         for (let i = 0; i < pos.length; i++) {
@@ -1449,6 +1463,37 @@ class Checker {
           : tDyn(tAny);
     this.applyFnType(pos[2]!, [cur], form);
     return tBool;
+  }
+
+  typeUpdateProp(pos: Type[], form: LispVal, raw?: LispVal[]): Type {
+    if (pos.length < 2) {
+      this.err(form, "update-prop needs a name and a function");
+      return tDyn(tAny);
+    }
+    this.expect(pos[0]!, pathWant(), raw?.[0] ?? form, "update-prop");
+    const keys = pathKeys(pos[0]!);
+    let cur: Type = tDyn(tAny);
+    let root: string | undefined;
+    let rest: string[] = [];
+    if (keys === null) cur = tNil;
+    else if (keys !== "unknown") {
+      root = keys[0];
+      rest = keys.slice(1);
+      cur = propLeafType(this.props.get(root) ?? [], rest);
+    }
+    const fnT = pos[1]!;
+    const ret = this.applyFnType(fnT, [cur], form);
+    if (root && this.pass === 0) {
+      const inner = unwrap(fnT);
+      const written =
+        inner.k === "fn" && inner.arrows.length
+          ? tOr(inner.arrows.map((a) => a.ret))
+          : ret;
+      const list = this.props.get(root) ?? [];
+      list.push(propWriteType(list, rest, written));
+      this.props.set(root, list);
+    }
+    return ret;
   }
 
   checkAttrKeys(fields: Extract<Type, { k: "map" }>, idT: Type, at: LispVal) {

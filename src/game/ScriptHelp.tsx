@@ -34,7 +34,7 @@ const SAMPLE_SRC = `; Use the same names as the editor. announce is a small help
 
 (on shoot (target: "panel")
   (set-wall "panel" [type: "empty"])
-  (update-attr "player" "ammo" (fn (n) (+ n 20))))
+  (update-attr "player" "ammo" (fn + #1 20))))
 `;
 
 const SAMPLE = (() => {
@@ -491,8 +491,8 @@ else
         </p>
         <pre className="overflow-x-auto rounded-md bg-[#0e0e12] p-3 font-mono text-xs leading-5 text-fg">
           {`(pipe xs
-  (map (fn (v) (* v 2)))
-  (reduce 0 (fn (acc cur) (+ acc cur))))`}
+  (map (fn * #1 2))
+  (reduce 0 (fn + #1 #2)))`}
         </pre>
         <p>
           A step must be a call or a name. A step cannot use{" "}
@@ -561,7 +561,46 @@ else
       <Block>
         <H>fn</H>
         <p>
-          <Code>(fn (a b) ...)</Code> makes a function with no name.
+          <Code>(fn (a b) ...)</Code> makes a function with no name. The
+          parameter list and the body work like <Code>def</Code>.
+        </p>
+        <p>
+          A bare <Code>fn</Code> starts another clause:
+        </p>
+        <pre className="overflow-x-auto rounded-md bg-[#0e0e12] p-3 font-mono text-xs leading-5 text-fg">
+          {`(fn (nil) 1
+ fn (n) (+ n 1))`}
+        </pre>
+        <p>
+          If the body uses <Code>#1</Code>, <Code>#2</Code>, and so on, the
+          function is short. <Code>#1</Code> is the first argument.{" "}
+          <Code>#2</Code> is the second. The highest number is how many
+          arguments it takes. A short function cannot contain another{" "}
+          <Code>fn</Code>.
+        </p>
+        <p>
+          One item is the body as written. More than one item is one call.
+        </p>
+        <ul className="list-disc space-y-1 pl-5">
+          <li>
+            <Code>(fn (+ #1 1))</Code> adds one and returns that number.
+          </li>
+          <li>
+            <Code>(fn + #1 1)</Code> is the same: those parts become one
+            call.
+          </li>
+          <li>
+            <Code>(fn (n) (+ #1 1))</Code> calls <Code>n</Code>, adds one
+            to the argument, then calls that result of <Code>n</Code> with
+            the sum.
+          </li>
+          <li>
+            <Code>(fn #1)</Code> returns its argument.
+          </li>
+        </ul>
+        <p>
+          <Code>#0</Code> and a bare <Code>#</Code> are errors.{" "}
+          <Code>#1</Code> inside a string is just text.
         </p>
       </Block>
       <Block>
@@ -719,7 +758,7 @@ function Builtins() {
         </ul>
         <p>Example:</p>
         <pre className="overflow-x-auto rounded-md bg-[#0e0e12] p-3 font-mono text-xs leading-5 text-fg">
-          {`(reduce [1 2 3] 0 (fn (acc cur) (- acc cur)))
+          {`(reduce [1 2 3] 0 (fn - #1 #2))
 ; is ((0 - 1) - 2) - 3, so -6`}
         </pre>
         <p>
@@ -727,9 +766,9 @@ function Builtins() {
         </p>
         <pre className="overflow-x-auto rounded-md bg-[#0e0e12] p-3 font-mono text-xs leading-5 text-fg">
           {`(pipe [1 2 3 4]
-  (map (fn (v) (* v 2)))
-  (filter (fn (v) (> v 4)))
-  (reduce 0 (fn (acc cur) (+ acc cur))))
+  (map (fn * #1 2))
+  (filter (fn > #1 4))
+  (reduce 0 (fn + #1 #2)))
 ; 6 + 8, so 14`}
         </pre>
       </Block>
@@ -852,7 +891,18 @@ function Commands() {
         <p>
           <Code>(set-prop "sprung" true)</Code> stores a value for the
           rest of the fight. <Code>(get-prop "sprung")</Code> reads that
-          value. A missing value is <Code>nil</Code>.
+          value. A missing value is <Code>nil</Code>.{" "}
+          <Code>(update-prop "hits" (fn + #1 1))</Code> reads the value,
+          calls the function, and stores the result. That is the same as{" "}
+          <Code>(set-prop "hits" (+ (get-prop "hits") 1))</Code> when the
+          value is already a number. If the name was never set, the
+          function receives <Code>nil</Code>.
+        </p>
+        <p>
+          The name can be a list, like{" "}
+          <Code>["stats" "hits"]</Code>. That walks inside a map under
+          the first name. Missing maps in the middle are created. A value
+          of <Code>nil</Code> removes that last key.
         </p>
         <p>
           <Code>(get m key)</Code> reads a key from a map.{" "}
@@ -899,9 +949,9 @@ function Commands() {
           field. If the thing is missing, the result is <Code>nil</Code>.
         </p>
         <p>
-          <Code>(update-attr "player" "ammo" (fn (n) (+ n 20)))</Code>{" "}
+          <Code>(update-attr "player" "ammo" (fn + #1 20))</Code>{" "}
           adds ammo.{" "}
-          <Code>(update-attr "player" ["inventory" "key-card"] (fn (n) (or n 1)))</Code>{" "}
+          <Code>(update-attr "player" ["inventory" "key-card"] (fn or #1 1))</Code>{" "}
           puts a card in the bag if it was missing.
         </p>
         <p>
@@ -975,7 +1025,9 @@ function Commands() {
           <Code>type</Code>, <Code>color</Code>, <Code>floor</Code>,
           and <Code>ceiling</Code>.{" "}
           <Code>(get-wall "panel" "type")</Code> reads one field.{" "}
-          <Code>(get-wall [5 8] "color")</Code> uses a point.
+          <Code>(get-wall [5 8] "color")</Code> uses a point. A zone
+          works if every square has the same fields. If they do not,
+          that is an error.
         </p>
         <p>
           The field is <Code>"type"</Code>, <Code>"color"</Code>,{" "}

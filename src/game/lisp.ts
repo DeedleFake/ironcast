@@ -99,6 +99,7 @@ export const BUILTINS = new Set([
   "update",
   "get-prop",
   "set-prop",
+  "update-prop",
   "merge",
   "say",
   "set-attr",
@@ -205,6 +206,25 @@ function mapSetPath(m: LispVal, path: string[], val: LispVal, ctx: string): Lisp
     return { k: "map", v: base };
   };
   return go(m, 0);
+}
+
+function getPropPath(h: Host, path: string[], ctx: string): LispVal {
+  const root = h.getVar(path[0]!);
+  if (path.length === 1) return root;
+  if (root.k === "nil") return nil();
+  return mapGetPath(root, path.slice(1), ctx);
+}
+
+function setPropPath(h: Host, path: string[], val: LispVal, ctx: string): LispVal {
+  if (path.length === 1) {
+    h.setVar(path[0]!, val);
+    return val;
+  }
+  const root = h.getVar(path[0]!);
+  const base: LispVal =
+    root.k === "nil" ? { k: "map", v: new Map() } : root;
+  h.setVar(path[0]!, mapSetPath(base, path.slice(1), val, ctx));
+  return val;
 }
 
 function parseInventory(val: LispVal): Map<string, number> {
@@ -440,6 +460,7 @@ export function tokenize(src: string): Token[] {
     while (j < n && !" \t\n\r();[]".includes(src[j]!)) j++;
     const word = src.slice(i, j);
     if (/^[+-]?\d+(\.\d+)?$/.test(word)) push("number", word);
+    else if (/^#[1-9]\d*$/.test(word)) push("keyword", word);
     else if (word.endsWith(":")) push("keyword", word);
     else if (KEYWORDS.has(word)) push("keyword", word);
     else if (BUILTINS.has(word)) push("builtin", word);
@@ -693,6 +714,16 @@ export function parseIfArgs(args: LispVal[]): IfClause[] {
   return clauses;
 }
 
+function fnIsMulti(v: { k: "list"; v: LispVal[] }): boolean {
+  if (v.v[0]?.k !== "sym" || v.v[0].v !== "fn") return false;
+  try {
+    const parsed = parseFn(v.v.slice(1));
+    return parsed.kind === "long" && parsed.clauses.length > 1;
+  } catch {
+    return false;
+  }
+}
+
 function hasBreakComment(v: LispVal): boolean {
   if (v.k === "comment") return true;
   if (v.k === "map") {
@@ -740,7 +771,7 @@ function formatVal(v: LispVal, indent: number): string {
     return suffixCmt(v, formatVecBlock(v, indent));
   }
   const headName = v.v[0]?.k === "sym" ? v.v[0].v : "";
-  if (hasBreakComment(v) || (BODY_SPECIALS.has(headName) && v.broke)) {
+  if (hasBreakComment(v) || (BODY_SPECIALS.has(headName) && v.broke) || fnIsMulti(v)) {
     return suffixCmt(v, formatBlock(v, indent));
   }
   const inline = formatInline(v);
@@ -879,11 +910,31 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
   }
 
   if (headName === "fn") {
+    const rest = v.v.slice(1);
+    let parsed: FnParsed | undefined;
+    try {
+      parsed = parseFn(rest);
+    } catch {
+      parsed = undefined;
+    }
+    if (parsed?.kind === "long") {
+      const lines: string[] = [];
+      parsed.clauses.forEach((c, i) => {
+        const sig = c.paramsForm ? formatInline(c.paramsForm) : "()";
+        if (i === 0) lines.push(`(fn ${sig}`);
+        else lines.push(` fn ${sig}`);
+        for (const item of c.body) {
+          pushPrefixed(lines, body, formatVal(item, indent + 1));
+        }
+      });
+      if (!lines.length) return "(fn)";
+      return closeOn(lines);
+    }
     const sig = v.v[1] ? " " + formatInline(v.v[1]) : "";
-    const rest = v.v.slice(2);
-    if (rest.length === 0) return `(${headName}${sig})`;
+    const after = v.v.slice(2);
+    if (after.length === 0) return `(${headName}${sig})`;
     const lines = [`(${headName}${sig}`];
-    for (const item of rest) {
+    for (const item of after) {
       pushPrefixed(lines, body, formatVal(item, indent + 1));
     }
     return closeOn(lines);
@@ -1188,6 +1239,7 @@ function isKeySym(v: LispVal): v is { k: "sym"; v: string } {
 
 export function parseParams(form: LispVal, ctx: string): Params {
   if (form.k !== "list") throw new LispError(`${ctx} needs a parameter list`);
+  if (form.vec) throw new LispError(`${ctx} needs a parameter list in (...)`);
   let mode: "pos" | "key" | null = null;
   const pos: Pattern[] = [];
   const keys: { name: string; pat: Pattern }[] = [];
@@ -1297,6 +1349,117 @@ function clauseCovers(earlier: Params, later: Params): boolean {
 
 function unreachableBy(prev: Clause[], next: Params): boolean {
   return prev.some((c) => clauseCovers(c.params, next));
+}
+
+const SLOT_RE = /^#([1-9]\d*)$/;
+
+export function isFnSep(v: LispVal): boolean {
+  return v.k === "sym" && v.v === "fn";
+}
+
+function isFnCall(v: LispVal): boolean {
+  if (v.k !== "list" || v.vec) return false;
+  const xs = v.v.filter((x) => x.k !== "comment");
+  return xs[0]?.k === "sym" && xs[0].v === "fn";
+}
+
+function walkSlots(
+  v: LispVal,
+  onSlot: (name: string, node: LispVal) => void,
+) {
+  if (v.k === "comment") return;
+  if (v.k === "sym") {
+    if (v.v.startsWith("#")) onSlot(v.v, v);
+    return;
+  }
+  if (v.k === "list") {
+    if (isFnCall(v)) return;
+    for (const x of v.v) walkSlots(x, onSlot);
+    return;
+  }
+  if (v.k === "map") {
+    for (const x of v.v.values()) walkSlots(x, onSlot);
+  }
+}
+
+function maxSlot(args: LispVal[]): number {
+  let max = 0;
+  for (const a of args) {
+    walkSlots(a, (name, node) => {
+      if (!SLOT_RE.test(name)) {
+        throw new LispError(`bad slot ${name}`, node.span?.start, node.span?.end);
+      }
+      max = Math.max(max, Number(name.slice(1)));
+    });
+  }
+  return max;
+}
+
+function hasNestedFn(args: LispVal[]): boolean {
+  const walk = (v: LispVal): boolean => {
+    if (v.k === "list") {
+      if (isFnCall(v)) return true;
+      return v.v.some(walk);
+    }
+    if (v.k === "map") return [...v.v.values()].some(walk);
+    return false;
+  };
+  return args.some(walk);
+}
+
+function slotParams(n: number): Params {
+  const pats: Pattern[] = [];
+  for (let i = 1; i <= n; i++) pats.push({ k: "bind", name: `#${i}` });
+  return { k: "pos", pats };
+}
+
+function shortFnBody(args: LispVal[]): LispVal[] {
+  const xs = args.filter((a) => a.k !== "comment");
+  if (xs.length <= 1) return xs;
+  return [list(xs)];
+}
+
+export type FnParsed = {
+  kind: "short" | "long";
+  clauses: { params: Params; body: LispVal[]; paramsForm?: LispVal }[];
+};
+
+export function parseFn(args: LispVal[]): FnParsed {
+  const n = maxSlot(args);
+  if (n > 0) {
+    if (hasNestedFn(args)) {
+      throw new LispError("a short fn cannot contain another fn");
+    }
+    return {
+      kind: "short",
+      clauses: [{ params: slotParams(n), body: shortFnBody(args) }],
+    };
+  }
+  if (!args.length) throw new LispError("(fn (args...) body)");
+  const clauses: FnParsed["clauses"] = [];
+  let i = 0;
+  while (i < args.length) {
+    const paramsForm = args[i];
+    if (!paramsForm || paramsForm.k !== "list") {
+      throw new LispError("(fn (args...) body)");
+    }
+    const params = parseParams(paramsForm, "fn");
+    i += 1;
+    const body: LispVal[] = [];
+    while (i < args.length && !isFnSep(args[i]!)) {
+      body.push(args[i]!);
+      i += 1;
+    }
+    if (unreachableBy(clauses, params)) {
+      throw new LispError("unreachable clause");
+    }
+    clauses.push({ params, body, paramsForm });
+    if (i < args.length && isFnSep(args[i]!)) {
+      i += 1;
+      if (i >= args.length) throw new LispError("fn after fn needs a parameter list");
+    }
+  }
+  return { kind: "long", clauses };
 }
 
 function bindPat(pat: Pattern, val: LispVal, env: Env): boolean {
@@ -1472,12 +1635,11 @@ function special(
 }
 
 function makeFn(args: LispVal[], env: Env): LispVal {
-  const paramsForm = args[0];
-  if (!paramsForm || paramsForm.k !== "list") {
-    throw new LispError("(fn (args...) body)");
-  }
-  const params = parseParams(paramsForm, "fn");
-  return makeFnVal([{ params, body: args.slice(1) }], env);
+  const parsed = parseFn(args);
+  return makeFnVal(
+    parsed.clauses.map((c) => ({ params: c.params, body: c.body })),
+    env,
+  );
 }
 
 function evalDef(args: LispVal[], env: Env, ctx: Ctx): LispVal {
@@ -1890,12 +2052,21 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       const next = callPos(args[2]!, [cur], ctx);
       return mapSetPath(m, path, next, "update");
     }
-    case "get-prop":
-      return h.getVar(asName(args[0] ?? nil()));
+    case "get-prop": {
+      const path = asPath(args[0] ?? nil(), "get-prop");
+      return getPropPath(h, path, "get-prop");
+    }
     case "set-prop": {
-      const val = args[1] ?? nil();
-      h.setVar(asName(args[0] ?? nil()), val);
-      return val;
+      const path = asPath(args[0] ?? nil(), "set-prop");
+      return setPropPath(h, path, args[1] ?? nil(), "set-prop");
+    }
+    case "update-prop": {
+      if (args.length < 2) throw new LispError("update-prop needs a name and a function");
+      const path = asPath(args[0]!, "update-prop");
+      const cur = getPropPath(h, path, "update-prop");
+      const next = callPos(args[1]!, [cur], ctx);
+      setPropPath(h, path, next, "update-prop");
+      return next;
     }
     case "merge": {
       const out = new Map<string, LispVal>();

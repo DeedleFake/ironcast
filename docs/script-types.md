@@ -335,7 +335,7 @@ Keywords are special forms. They are not functions. They do not take `k:` argume
 
 Allowed only at the top of the script. Defines a function `name`. Several `def` forms with the same `name` must sit next to each other. They are clauses of one function. The first matching clause at run time wins.
 
-`params` is either all positional (`n`, `0`, `"x"`) or all keyword (`target:`, `target: "server"`). Mixing is an error.
+`params` is either all positional (`n`, `0`, `"x"`) or all keyword (`target:`, `target: "server"`). Mixing is an error. `[]` is not a parameter list.
 
 | Kind of parameter | Argument type of that clause |
 | --- | --- |
@@ -354,9 +354,28 @@ A `def` that is not at the top of the script is an error.
 
 ```
 (fn (params…) body…)
+(fn (nil) 1
+ fn (n) (+ n 1))
+(fn + #1 1)
+(fn (+ #1 1))
 ```
 
-Same parameter rules as `def`. The result type is `fn` with one arrow. The function may use names from the enclosing scope.
+Same parameter rules as `def` for a long `fn`. A bare `fn` at that level starts another clause. Nested `(fn …)` is a new function, not a separator. The result type is `fn` with one arrow per clause. When two clauses print the same arrow, that arrow is shown once. The function may use names from the enclosing scope.
+
+`[]` is not a parameter list. `(fn [x] …)` is an error.
+
+If `#1`, `#2`, … appear in this `fn` (not inside a nested `fn`), the form is short. `#1` is the first argument. The highest index is the arity. Missing lower indexes are unused binds. `#0` and a bare `#` are errors. `#1` inside a string is not a slot.
+
+A short `fn` cannot contain another `fn`. A short `fn` is one expression. One item after `fn` is that expression. Two or more items are wrapped as one call:
+
+| Form | Meaning |
+| --- | --- |
+| `(fn (+ #1 1))` | add one, return the number |
+| `(fn + #1 1)` | the same call |
+| `(fn (n) (+ #1 1))` | call `n` with no arguments, add one, call that result with the sum |
+| `(fn #1)` | return the argument |
+
+`#1` starts as `dynamic(any())` and is inferred from the body the same way as a named bind.
 
 ### `on`
 
@@ -477,8 +496,8 @@ Each step is a name `f` or a call `(f extra…)`. The current value is the **fir
 
 ```
 (pipe xs
-  (map (fn (v) (* v 2)))
-  (reduce 0 (fn (acc cur) (+ acc cur))))
+  (map (fn * #1 2))
+  (reduce 0 (fn + #1 #2)))
 ```
 
 ---
@@ -686,10 +705,15 @@ This store is global for the script. It is not a map value.
 
 | Call | Arguments | Result |
 | --- | --- | --- |
-| `(set-prop k v)` | `stringy`, any | type of `v` |
-| `(get-prop k)` | `stringy` | See below |
+| `(set-prop k v)` | path, any | type of `v` |
+| `(get-prop k)` | path | See below |
+| `(update-prop k f)` | path, `fn` | result of `f` |
 
-`set-prop` records the type of `v` under exact text `k` for the whole script, including every handler and every `after` body. Order in the file does not matter.
+`k` is a string or a list of strings, the same as `get` / `set` / `update`. One string is a top-level name. A list walks inside a map stored under the first name. Missing maps in the middle are created on `set-prop` and `update-prop`. A value of `nil` removes that last key.
+
+`set-prop` records a write to the top-level name for the whole script, including every handler and every `after` body. Order in the file does not matter. A nested write records the new type of that top-level map.
+
+`update-prop` reads the current value at `k` (same type as `get-prop`), calls `f` with that value, and writes the result. The write is recorded like `set-prop`. The result of the call is the result of `f`. If the name was never set, `f` receives `nil`.
 
 `get-prop`:
 
@@ -697,6 +721,7 @@ This store is global for the script. It is not a map value.
 | --- | --- |
 | exact text that was never written | `nil` |
 | exact text written as `T1`, `T2`, … | `dynamic(T1 or T2 or … or nil)` |
+| exact path `["a" "b"]` | `dynamic` of `get` of those writes of `"a"` along `"b"`, or `nil` |
 | not exact text | `dynamic(any())` |
 
 ### Player and messages
@@ -739,6 +764,8 @@ The player is a thing with id `"player"`. Health, ammo, inventory, and pose are 
 | `(update-wall place field f)` | `place`, those four names, `fn` | `bool()` |
 
 `fields` for `set-wall` may have: `type`, `color`, `floor`, `ceiling`. `type` must fit `wall_type() or unknown_string()`. Other keys are an error. At least one field is required at run time.
+
+If `place` is a zone, `get-wall` needs every square to have the same fields. If they do not, that is an error.
 
 If `attr` is exact text that is not one of those four names, that is an error. If `attr` is `unknown_string()`, the result is `dynamic(any())`.
 
