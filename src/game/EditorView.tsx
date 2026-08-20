@@ -33,7 +33,7 @@ import { ExportMenu, ImportMenu } from "./FileMenu";
 import { ScriptEditor } from "./ScriptEditor";
 import { ScriptHelp } from "./ScriptHelp";
 import { sfx } from "./audio";
-import { compileProgram } from "./lisp";
+import { checkScript, worldFromLevel, type Diagnostic } from "./typesys";
 import {
   ArrowLeft,
   BoxSelect,
@@ -341,6 +341,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [scriptH, setScriptH] = useState(224);
   const [scriptW, setScriptW] = useState(400);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [scriptDiags, setScriptDiags] = useState<Diagnostic[]>([]);
   const [cellSize, setCellSize] = useState(22);
   const [status, setStatus] = useState("");
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -437,6 +438,13 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
     commitEdit(resizeLevel(cur, w, h));
     setStatus(`Map is now ${w}×${h}`);
   }, [commitEdit]);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setScriptDiags(checkScript(level.script ?? "", worldFromLevel(level)));
+    }, 1500);
+    return () => window.clearTimeout(t);
+  }, [level]);
 
   const onSizeW = (raw: number) => {
     setSizeW(raw);
@@ -2082,14 +2090,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 value={level.script ?? ""}
                 onChange={(src) => setLevel((l) => ({ ...l, script: src }))}
                 onHelp={() => setHelpOpen(true)}
-                error={
-                  (level.script ?? "").trim()
-                    ? (() => {
-                        const r = compileProgram(level.script ?? "");
-                        return r.ok ? "" : r.error;
-                      })()
-                    : ""
-                }
+                diagnostics={scriptDiags}
               />
             </div>
           </div>

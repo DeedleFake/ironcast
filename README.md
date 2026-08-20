@@ -61,7 +61,9 @@ Import has two actions. From file reads a JSON file. From clipboard opens a box.
 
 ## Scripts
 
-Each map has one script. The script is a Lisp program. Open Script in the editor. Then open the tutorial in that panel for the language rules.
+Each map has one script. The script is a Lisp program. Open Script in the editor. Then open the tutorial in that panel for the language rules. The editor marks type errors after a short pause.
+
+The type system is described in [docs/script-types.md](docs/script-types.md).
 
 A typical script locks a door with set-attr. Then the script unlocks the door when the player picks up a named item.
 

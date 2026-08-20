@@ -12,7 +12,7 @@ export type LispVal = (
   | { k: "map"; v: Map<string, LispVal> }
   | { k: "comment"; v: string }
   | { k: "fn"; clauses: Clause[]; keys: string[]; env: Env }
-) & { cmt?: string; blank?: boolean; broke?: boolean };
+) & { cmt?: string; blank?: boolean; broke?: boolean; span?: { start: number; end: number } };
 
 export type Pattern =
   | { k: "bind"; name: string }
@@ -119,9 +119,13 @@ export const BUILTINS = new Set([
 ]);
 
 export class LispError extends Error {
-  constructor(message: string) {
+  start?: number;
+  end?: number;
+  constructor(message: string, start?: number, end?: number) {
     super(message);
     this.name = "LispError";
+    this.start = start;
+    this.end = end;
   }
 }
 
@@ -351,7 +355,7 @@ export function tokenize(src: string): Token[] {
 
 export type ParseResult =
   | { ok: true; forms: LispVal[] }
-  | { ok: false; error: string };
+  | { ok: false; error: string; start?: number; end?: number };
 
 export function parseLisp(src: string): ParseResult {
   try {
@@ -366,6 +370,11 @@ export function parseLisp(src: string): ParseResult {
     }
     return { ok: true, forms };
   } catch (e) {
+    if (e instanceof LispError) {
+      const start = e.start;
+      const end = e.end ?? (start != null ? Math.min(src.length, start + 1) : undefined);
+      return { ok: false, error: e.message, start, end };
+    }
     return { ok: false, error: e instanceof Error ? e.message : "Parse error" };
   }
 }
@@ -395,7 +404,7 @@ function skipH(p: { s: string; i: number }) {
 function readComment(p: { s: string; i: number }): LispVal {
   const start = p.i;
   while (p.i < p.s.length && p.s[p.i] !== "\n") p.i++;
-  return { k: "comment", v: p.s.slice(start, p.i) };
+  return { k: "comment", v: p.s.slice(start, p.i), span: { start, end: p.i } };
 }
 
 function attachTrail(p: { s: string; i: number }, v: LispVal): LispVal {
@@ -408,23 +417,28 @@ function attachTrail(p: { s: string; i: number }, v: LispVal): LispVal {
   return v;
 }
 
+function withSpan(start: number, end: number, v: LispVal): LispVal {
+  v.span = { start, end };
+  return v;
+}
+
 function readDelimited(p: { s: string; i: number }, close: ")" | "]"): LispVal {
   const open = p.i;
   p.i++;
   const xs: LispVal[] = [];
   for (;;) {
     skip(p);
-    if (p.i >= p.s.length) throw new LispError(`missing ${close}`);
+    if (p.i >= p.s.length) throw new LispError(`missing ${close}`, open, p.i);
     const ch = p.s[p.i]!;
     if (ch === close) {
       p.i++;
       break;
     }
-    if (ch === ")" || ch === "]") throw new LispError(`unexpected ${ch}`);
+    if (ch === ")" || ch === "]") throw new LispError(`unexpected ${ch}`, p.i, p.i + 1);
     xs.push(read(p));
   }
   const inner = close === "]" ? finishBracket(xs) : list(xs);
-  const form = attachTrail(p, inner);
+  const form = attachTrail(p, withSpan(open, p.i, inner));
   if (p.s.slice(open, p.i).includes("\n")) form.broke = true;
   return form;
 }
@@ -458,14 +472,15 @@ function finishBracket(xs: LispVal[]): LispVal {
 
 function read(p: { s: string; i: number }): LispVal {
   skip(p);
-  if (p.i >= p.s.length) throw new LispError("unexpected end of script");
+  if (p.i >= p.s.length) throw new LispError("unexpected end of script", Math.max(0, p.i - 1), p.i);
+  const start = p.i;
   const c = p.s[p.i]!;
   if (c === ";") return readComment(p);
   if (c === "(") return readDelimited(p, ")");
   if (c === "[") return readDelimited(p, "]");
-  if (c === ")") throw new LispError("unexpected )");
-  if (c === "]") throw new LispError("unexpected ]");
-  if (c === "'") throw new LispError("unexpected '");
+  if (c === ")") throw new LispError("unexpected )", p.i, p.i + 1);
+  if (c === "]") throw new LispError("unexpected ]", p.i, p.i + 1);
+  if (c === "'") throw new LispError("unexpected '", p.i, p.i + 1);
   if (c === '"') {
     p.i++;
     let out = "";
@@ -473,7 +488,7 @@ function read(p: { s: string; i: number }): LispVal {
       const ch = p.s[p.i]!;
       if (ch === '"') {
         p.i++;
-        return attachTrail(p, str(out));
+        return attachTrail(p, withSpan(start, p.i, str(out)));
       }
       if (ch === "\\" && p.i + 1 < p.s.length) {
         const n = p.s[p.i + 1]!;
@@ -484,18 +499,18 @@ function read(p: { s: string; i: number }): LispVal {
       out += ch;
       p.i++;
     }
-    throw new LispError("unterminated string");
+    throw new LispError("unterminated string", start, p.i);
   }
   let j = p.i + 1;
   while (j < p.s.length && !" \t\n\r();[]".includes(p.s[j]!)) j++;
   const word = p.s.slice(p.i, j);
   p.i = j;
-  if (word === "true") return attachTrail(p, bool(true));
-  if (word === "false") return attachTrail(p, bool(false));
-  if (word === "nil") return attachTrail(p, nil());
-  if (/^[+-]?\d+(\.\d+)?$/.test(word)) return attachTrail(p, num(Number(word)));
-  if (!word) throw new LispError("empty token");
-  return attachTrail(p, sym(word));
+  if (word === "true") return attachTrail(p, withSpan(start, j, bool(true)));
+  if (word === "false") return attachTrail(p, withSpan(start, j, bool(false)));
+  if (word === "nil") return attachTrail(p, withSpan(start, j, nil()));
+  if (/^[+-]?\d+(\.\d+)?$/.test(word)) return attachTrail(p, withSpan(start, j, num(Number(word))));
+  if (!word) throw new LispError("empty token", start, j);
+  return attachTrail(p, withSpan(start, j, sym(word)));
 }
 
 export function formatLisp(src: string): { ok: true; text: string } | { ok: false; error: string } {
@@ -524,7 +539,7 @@ const BODY_SPECIALS = new Set([
   "pipe",
 ]);
 
-type IfClause = { test: LispVal | null; not: boolean; body: LispVal[] };
+export type IfClause = { test: LispVal | null; not: boolean; body: LispVal[] };
 
 function isElseSym(v: LispVal): boolean {
   return v.k === "sym" && v.v === "else";
@@ -552,7 +567,7 @@ function readIfTest(
   return { test: args[i]!, not: false, i: i + 1 };
 }
 
-function parseIfArgs(args: LispVal[]): IfClause[] {
+export function parseIfArgs(args: LispVal[]): IfClause[] {
   if (!args.length) throw new LispError("(if test ...)");
   const clauses: IfClause[] = [];
   let cur = readIfTest(args, 0, "if");
@@ -1109,7 +1124,7 @@ export function parseParams(form: LispVal, ctx: string): Params {
 
 type CallParts = { pos: LispVal[]; keys: Map<string, LispVal> };
 
-function parseCallRaw(raw: LispVal[]): { pos: LispVal[]; keys: { name: string; raw: LispVal }[] } {
+export function parseCallRaw(raw: LispVal[]): { pos: LispVal[]; keys: { name: string; raw: LispVal }[] } {
   const pos: LispVal[] = [];
   const keys: { name: string; raw: LispVal }[] = [];
   let keyed = false;
@@ -1890,7 +1905,7 @@ function eq(a: LispVal, b: LispVal): boolean {
   return (a as { v: unknown }).v === (b as { v: unknown }).v;
 }
 
-const EVENT_ARGS: Record<string, string[]> = {
+export const EVENT_ARGS: Record<string, string[]> = {
   start: [],
   enter: ["zone"],
   leave: ["zone"],

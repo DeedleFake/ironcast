@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatLisp, tokenize } from "./lisp";
+import type { Diagnostic } from "./typesys";
 
 const KIND_CLASS: Record<string, string> = {
   comment: "text-dim",
@@ -16,39 +17,64 @@ const FACE =
   "box-border m-0 block h-full w-full p-2 font-mono text-xs leading-5 [tab-size:2] break-normal whitespace-pre";
 
 function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">");
+  return s.replace(/[&<>"]/g, (ch) => {
+    if (ch === "&") return "\u0026amp;";
+    if (ch === "<") return "\u0026lt;";
+    if (ch === ">") return "\u0026gt;";
+    return "\u0026quot;";
+  });
 }
 
-function highlightHtml(src: string): string {
-  const body = tokenize(src || " ")
-    .map((t) => {
-      const text = escapeHtml(t.text);
-      const cls = KIND_CLASS[t.kind];
-      if (!cls) return text;
-      return `<span class="${cls}">${text}</span>`;
-    })
-    .join("");
-  // A trailing newline is eaten by <pre>; keep it so the layers stay lined up.
-  return `${body}\n`;
+function mergeDiags(diags: Diagnostic[]): Diagnostic[] {
+  if (!diags.length) return [];
+  const sorted = [...diags].sort((a, b) => a.start - b.start || a.end - b.end);
+  const out: Diagnostic[] = [];
+  for (const d of sorted) {
+    const last = out[out.length - 1];
+    if (last && d.start <= last.end) {
+      last.end = Math.max(last.end, d.end);
+      if (!last.message.includes(d.message)) last.message += " · " + d.message;
+    } else out.push({ ...d });
+  }
+  return out;
+}
+
+function highlightHtml(src: string, diags: Diagnostic[]): string {
+  const ranges = mergeDiags(diags);
+  const tokens = tokenize(src || " ");
+  let i = 0;
+  let html = "";
+  for (const t of tokens) {
+    const start = i;
+    const end = i + t.text.length;
+    const text = escapeHtml(t.text);
+    const cls = KIND_CLASS[t.kind];
+    const hit = ranges.find((r) => r.start < end && r.end > start);
+    let piece = cls ? `<span class="${cls}">${text}</span>` : text;
+    if (hit) {
+      piece = `<span class="rounded-sm bg-primary/20 underline decoration-wavy decoration-primary" title="${escapeHtml(hit.message)}">${piece}</span>`;
+    }
+    html += piece;
+    i = end;
+  }
+  return `${html}\n`;
 }
 
 export function ScriptEditor({
   value,
   onChange,
   onHelp,
-  error,
+  diagnostics = [],
 }: {
   value: string;
   onChange: (src: string) => void;
   onHelp?: () => void;
-  error?: string;
+  diagnostics?: Diagnostic[];
 }) {
   const preRef = useRef<HTMLPreElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
-  const html = useMemo(() => highlightHtml(value), [value]);
+  const html = useMemo(() => highlightHtml(value, diagnostics), [value, diagnostics]);
+  const [tip, setTip] = useState<string>("");
 
   const syncScroll = () => {
     const ta = taRef.current;
@@ -68,6 +94,22 @@ export function ScriptEditor({
   useEffect(() => {
     syncScroll();
   }, [value]);
+
+  useEffect(() => {
+    const ta = taRef.current;
+    if (!ta) return;
+    const onMove = () => {
+      const start = ta.selectionStart ?? 0;
+      const hit = diagnostics.find((d) => start >= d.start && start <= d.end);
+      setTip(hit?.message ?? "");
+    };
+    ta.addEventListener("keyup", onMove);
+    ta.addEventListener("click", onMove);
+    return () => {
+      ta.removeEventListener("keyup", onMove);
+      ta.removeEventListener("click", onMove);
+    };
+  }, [diagnostics]);
 
   const format = () => {
     const result = formatLisp(value);
@@ -114,7 +156,11 @@ export function ScriptEditor({
           className={`absolute inset-0 resize-none overflow-auto bg-transparent text-transparent caret-fg outline-none ${FACE}`}
         />
       </div>
-      {error ? <p className="text-[11px] text-primary">{error}</p> : null}
+      {tip || diagnostics.length ? (
+        <p className="max-h-16 overflow-auto text-[11px] text-primary">
+          {tip || diagnostics.map((d) => d.message).join(" · ")}
+        </p>
+      ) : null}
     </div>
   );
 }
