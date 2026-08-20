@@ -25,6 +25,17 @@ export type Diagnostic = {
   message: string;
 };
 
+export type TypeHint = {
+  start: number;
+  end: number;
+  text: string;
+};
+
+export type CheckResult = {
+  diagnostics: Diagnostic[];
+  hints: TypeHint[];
+};
+
 export type Type =
   | { k: "none" }
   | { k: "any" }
@@ -173,6 +184,25 @@ function unwrap(t: Type): Type {
   return t.k === "dyn" ? t.t : t;
 }
 
+function fromUsage(t: Type): Type {
+  const u = unwrap(t);
+  if (u.k === "any") return tDyn(tAny);
+  return u;
+}
+
+function collectAliases(v: LispVal, into: Map<string, string>) {
+  if (v.k === "map") {
+    for (const [k, val] of v.v) {
+      if (val.k === "sym") into.set(k, val.v);
+      else collectAliases(val, into);
+    }
+    return;
+  }
+  if (v.k === "list") {
+    for (const x of v.v) collectAliases(x, into);
+  }
+}
+
 function same(a: Type, b: Type): boolean {
   return printType(a) === printType(b);
 }
@@ -212,19 +242,40 @@ export function printType(t: Type): string {
       if (t.rest) parts.push(`*: ${printType(t.rest)}`);
       return parts.length ? `[${parts.join(" ")}]` : "empty_map()";
     }
-    case "fn":
-      return "fn";
-    case "or": {
-      const lits = t.ts.filter((x) => x.k === "str" && x.v !== undefined);
-      const rest = t.ts.filter((x) => !(x.k === "str" && x.v !== undefined));
-      if (lits.length > 4) {
-        return ["id()", ...rest.map(printType)].join(" or ");
+    case "fn": {
+      if (!t.arrows.length) return "fn";
+      const parts: string[] = [];
+      for (const ar of t.arrows) {
+        const p = printArrow(ar);
+        if (!parts.includes(p)) parts.push(p);
       }
-      return t.ts.map(printType).join(" or ");
+      return parts.join(" and ");
+    }
+    case "or": {
+      const lits: string[] = [];
+      const rest: Type[] = [];
+      for (const x of t.ts) {
+        if (x.k === "str" && x.v !== undefined) lits.push(x.v);
+        else rest.push(x);
+      }
+      const named = closedLitName(lits);
+      const head = named ?? (lits.length > 4 ? "id()" : lits.map((v) => JSON.stringify(v)).join(" or "));
+      const parts = [head, ...rest.map(printType)].filter(Boolean);
+      return parts.join(" or ");
     }
     case "dyn":
       return `dynamic(${printType(t.t)})`;
   }
+}
+
+function printArrow(ar: Arrow): string {
+  if (ar.k === "pos") {
+    return `(${ar.args.map(printType).join(" ")}) -> ${printType(ar.ret)}`;
+  }
+  const keys = [...ar.args.entries()]
+    .map(([k, v]) => `${k}: ${printType(v)}`)
+    .join(" ");
+  return `(${keys}) -> ${printType(ar.ret)}`;
 }
 
 function intersect(a: Type, b: Type): Type {
@@ -261,10 +312,20 @@ function intersect(a: Type, b: Type): Type {
   if (a.k === "list" && b.k === "list") return tList(intersect(a.el, b.el));
   if (a.k === "tuple" && b.k === "tuple") {
     if (a.items.length !== b.items.length) return tNone;
-    return tTuple(a.items.map((t, i) => intersect(t, b.items[i]!)));
+    const items = a.items.map((t, i) => intersect(t, b.items[i]!));
+    if (items.some(isNone)) return tNone;
+    return tTuple(items);
   }
-  if (a.k === "list" && b.k === "tuple") return tTuple(b.items.map((t) => intersect(t, a.el)));
-  if (b.k === "list" && a.k === "tuple") return tTuple(a.items.map((t) => intersect(t, b.el)));
+  if (a.k === "list" && b.k === "tuple") {
+    const items = b.items.map((t) => intersect(t, a.el));
+    if (items.some(isNone)) return tNone;
+    return tTuple(items);
+  }
+  if (b.k === "list" && a.k === "tuple") {
+    const items = a.items.map((t) => intersect(t, b.el));
+    if (items.some(isNone)) return tNone;
+    return tTuple(items);
+  }
   if (a.k === "empty_map") {
     if (b.k === "empty_map") return tEmptyMap;
     if (b.k === "map" && !b.keys.size) return tEmptyMap;
@@ -455,6 +516,18 @@ const SHAPE_TYPE = tOr(PICKUP_SHAPES.map((s) => tLit(s)));
 const VARIANT_TYPE = tOr([tLit("grunt"), tLit("bruiser")]);
 const COLOR_TYPE = tOr([tNum, tStr, tUStr]);
 
+function closedLitName(lits: string[]): string | undefined {
+  const table: [string, readonly string[]][] = [
+    ["wall_type()", WALL_IDS],
+    ["thing_type()", ENTITY_KINDS],
+    ["shape_type()", PICKUP_SHAPES],
+  ];
+  for (const [name, closed] of table) {
+    if (lits.length === closed.length && closed.every((x) => lits.includes(x))) return name;
+  }
+  return undefined;
+}
+
 function idType(world: TypeWorld): Type {
   if (!world.ids.size) return tNone;
   return tOr([...world.ids].map(tLit));
@@ -474,10 +547,13 @@ type Env = Map<string, Type>;
 
 class Checker {
   diags: Diagnostic[] = [];
+  hints: TypeHint[] = [];
+  hintAt = new Map<string, TypeHint>();
   world: TypeWorld;
   props = new Map<string, Type[]>();
   fns = new Map<string, Type>();
   pass = 0;
+  env: Env = new Map();
 
   constructor(world: TypeWorld) {
     this.world = world;
@@ -489,12 +565,47 @@ class Checker {
     this.diags.push({ start: s.start, end: Math.max(s.end, s.start + 1), message });
   }
 
+  note(v: LispVal | undefined, t: Type, name?: string) {
+    if (this.pass === 0) return;
+    const s = v?.span;
+    if (!s || s.end <= s.start) return;
+    const text = name ? `${name} : ${printType(t)}` : printType(t);
+    const key = `${s.start}:${s.end}`;
+    const last = this.hintAt.get(key);
+    if (last) {
+      last.text = text;
+      return;
+    }
+    const hint: TypeHint = { start: s.start, end: s.end, text };
+    this.hintAt.set(key, hint);
+    this.hints.push(hint);
+  }
+
+  noteParams(form: LispVal | undefined, env: Env) {
+    if (!form || form.k !== "list") return;
+    for (const p of form.v) {
+      if (p.k !== "sym") continue;
+      const name = p.v.endsWith(":") ? p.v.slice(0, -1) : p.v;
+      const t = env.get(name);
+      if (t) this.note(p, t, name);
+    }
+  }
+
+  noteLetKeys(map: LispVal, env: Env) {
+    if (map.k !== "map" || !map.keySpans) return;
+    for (const [k, span] of map.keySpans) {
+      const t = env.get(k);
+      if (t) this.note({ k: "sym", v: k, span }, t, k);
+    }
+  }
+
   expect(got: Type, want: Type, at: LispVal | undefined, ctx: string): Type {
     const ok = got.k === "dyn" ? overlaps(got, want) : isSubtype(got, want);
     if (!ok) {
       this.err(at, `${ctx}: got ${printType(got)}, need ${printType(want)}`);
       return tDyn(want);
     }
+    if (at?.k === "sym") this.refine(this.env, at.v, unwrap(want));
     const hit = intersect(unwrap(got), unwrap(want));
     return got.k === "dyn" ? tDyn(hit) : got;
   }
@@ -513,6 +624,29 @@ class Checker {
   }
 
   typeForm(v: LispVal, env: Env): Type {
+    const prev = this.env;
+    this.env = env;
+    try {
+      const t = this.infer(v, env);
+      if (v.k === "comment") return t;
+      const name =
+        v.k === "sym"
+          ? v.v
+          : v.k === "bool"
+            ? v.v
+              ? "true"
+              : "false"
+            : v.k === "nil"
+              ? "nil"
+              : undefined;
+      this.note(v, t, name);
+      return t;
+    } finally {
+      this.env = prev;
+    }
+  }
+
+  infer(v: LispVal, env: Env): Type {
     if (v.k === "comment") return tNil;
     if (v.k === "num") return tNum;
     if (v.k === "bool") return v.v ? tTrue : tFalse;
@@ -535,6 +669,12 @@ class Checker {
       if (!v.v.size) return tEmptyMap;
       const keys = new Map<string, Type>();
       for (const [k, val] of v.v) keys.set(k, this.typeForm(val, env));
+      if (v.keySpans) {
+        for (const [k, span] of v.keySpans) {
+          const kt = keys.get(k);
+          if (kt) this.note({ k: "sym", v: k, span }, kt, k);
+        }
+      }
       return tMap(keys);
     }
     if (v.k !== "list") return tAny;
@@ -658,7 +798,7 @@ class Checker {
     };
     const want = pred[op.v];
     if (!want) return;
-    const yes = intersect(cur, want);
+    const yes = fromUsage(intersect(cur, want));
     const no = cur; // subtracting is optional; keep loose on the false side
     apply(arg.v, isNone(yes) ? cur : yes, no);
   }
@@ -679,10 +819,41 @@ class Checker {
       this.err(args[0], `let needs a map, got ${printType(mt)}`);
     }
     const child = new Map(env);
+    const letNames = new Set<string>();
     if (inner.k === "map") {
-      for (const [k, t] of inner.keys) child.set(k, t);
+      for (const [k, t] of inner.keys) {
+        child.set(k, t);
+        letNames.add(k);
+      }
     }
-    return this.forms(args.slice(1), child);
+    const body = args.slice(1);
+    const saved = this.pass;
+    this.pass = 0;
+    this.forms(body, child);
+    this.pass = saved;
+    for (const [k, t] of child) {
+      if (!letNames.has(k) && env.has(k)) env.set(k, t);
+    }
+    for (const k of letNames) {
+      const t = child.get(k);
+      if (t) child.set(k, fromUsage(t));
+    }
+    const aliases = new Map<string, string>();
+    collectAliases(args[0], aliases);
+    for (const [k, src] of aliases) {
+      if (!letNames.has(k)) continue;
+      const t = child.get(k);
+      if (!t) continue;
+      const cur = child.get(src) ?? env.get(src);
+      if (!cur) continue;
+      const next = fromUsage(intersect(cur, t));
+      if (isNone(next)) continue;
+      child.set(src, next);
+      if (env.has(src)) env.set(src, next);
+    }
+    const ret = this.forms(body, child);
+    this.noteLetKeys(args[0], child);
+    return ret;
   }
 
   typeFn(args: LispVal[], env: Env, form: LispVal): Type {
@@ -692,10 +863,10 @@ class Checker {
     }
     try {
       const params = parseParams(args[0], "fn");
-      const child = new Map(env);
-      this.bindParams(params, child);
-      const ret = this.forms(args.slice(1), child);
-      return { k: "fn", arrows: [this.arrowFrom(params, child, ret)] };
+      return {
+        k: "fn",
+        arrows: [this.typeClause(params, args.slice(1), env, args[0])],
+      };
     } catch (e) {
       this.err(form, e instanceof Error ? e.message : "bad fn");
       return tDyn(tAny);
@@ -711,6 +882,8 @@ class Checker {
     let cur = this.typeForm(steps[0]!, env);
     for (const step of steps.slice(1)) {
       if (step.k === "sym") {
+        const fnT = this.lookup(env, step.v);
+        if (fnT) this.note(step, fnT, step.v);
         cur = this.applyTypeToCall(step.v, [cur], new Map(), step, env);
         continue;
       }
@@ -741,6 +914,41 @@ class Checker {
       if (pat.k === "bind") env.set(pat.name, tDyn(tAny));
       else env.set(name, kindOf(pat.value));
     }
+  }
+
+  promoteBinds(params: Params, env: Env) {
+    const bump = (name: string) => {
+      const t = env.get(name);
+      if (!t) return;
+      env.set(name, fromUsage(t));
+    };
+    if (params.k === "pos") {
+      for (const p of params.pats) {
+        if (p.k === "bind") bump(p.name);
+      }
+      return;
+    }
+    for (const { pat } of params.pats) {
+      if (pat.k === "bind") bump(pat.name);
+    }
+  }
+
+  typeClause(
+    params: Params,
+    body: LispVal[],
+    parent: Env,
+    paramsForm?: LispVal,
+  ): Arrow {
+    const e = new Map(parent);
+    this.bindParams(params, e);
+    const saved = this.pass;
+    this.pass = 0;
+    this.forms(body, e);
+    this.pass = saved;
+    this.promoteBinds(params, e);
+    const ret = this.forms(body, e);
+    this.noteParams(paramsForm, e);
+    return this.arrowFrom(params, e, ret);
   }
 
   arrowFrom(params: Params, env: Env, ret: Type): Arrow {
@@ -777,7 +985,9 @@ class Checker {
       this.err(form, `not a function: ${printType(fnT)}`);
       return tDyn(tAny);
     }
-    return this.applyArrows(inner.arrows, pos, keys, form);
+    const ret = this.applyArrows(inner.arrows, pos, keys, form);
+    this.refineCall(inner.arrows, parts.pos, parts.keys, env);
+    return ret;
   }
 
   applyFnType(fnT: Type, pos: Type[], form: LispVal): Type {
@@ -819,6 +1029,32 @@ class Checker {
     }
     const u = tOr(rets);
     return rets.length > 1 ? tDyn(u) : u;
+  }
+
+  refineCall(
+    arrows: Arrow[],
+    posRaw: LispVal[],
+    keyRaw: { name: string; raw: LispVal }[],
+    env: Env,
+  ) {
+    const posAr = arrows.filter(
+      (a): a is Extract<Arrow, { k: "pos" }> => a.k === "pos" && a.args.length === posRaw.length,
+    );
+    for (let i = 0; i < posRaw.length; i++) {
+      const arg = posRaw[i];
+      if (!arg || arg.k !== "sym") continue;
+      const wants = posAr.map((a) => a.args[i]!);
+      if (!wants.length || wants.some((t) => unwrap(t).k === "any")) continue;
+      this.refine(env, arg.v, tOr(wants.map(unwrap)));
+    }
+    if (posRaw.length) return;
+    const keyAr = arrows.filter((a): a is Extract<Arrow, { k: "key" }> => a.k === "key");
+    for (const { name, raw } of keyRaw) {
+      if (raw.k !== "sym") continue;
+      const wants = keyAr.map((a) => a.args.get(name)).filter((t): t is Type => !!t);
+      if (!wants.length || wants.some((t) => unwrap(t).k === "any")) continue;
+      this.refine(env, raw.v, tOr(wants.map(unwrap)));
+    }
   }
 
   applyTypeToCall(
@@ -885,9 +1121,7 @@ class Checker {
       case "/":
         return nums();
       case "mod":
-        this.expect(pos[0] ?? tNil, tNum, raw?.[0] ?? form, name);
-        this.expect(pos[1] ?? tNil, tNum, raw?.[1] ?? form, name);
-        return tNum;
+        return nums();
       case "abs":
       case "floor":
       case "ceil":
@@ -903,6 +1137,8 @@ class Checker {
       case ">=":
         this.expect(pos[0] ?? tNil, tNum, raw?.[0] ?? form, name);
         this.expect(pos[1] ?? tNil, tNum, raw?.[1] ?? form, name);
+        if (raw?.[0]?.k === "sym") this.refine(env, raw[0].v, tNum);
+        if (raw?.[1]?.k === "sym") this.refine(env, raw[1].v, tNum);
         return tBool;
       case "str": {
         const parts = pos.map(unwrap);
@@ -1379,25 +1615,41 @@ function mergeDiags(diags: Diagnostic[]): Diagnostic[] {
   return out;
 }
 
-export function checkScript(src: string, world: TypeWorld): Diagnostic[] {
-  if (!src.trim()) return [];
+export function checkScript(src: string, world: TypeWorld): CheckResult {
+  if (!src.trim()) return { diagnostics: [], hints: [] };
   const parsed = parseLisp(src);
   if (!parsed.ok) {
-    return [
-      {
-        start: parsed.start ?? 0,
-        end: parsed.end ?? Math.min(src.length, (parsed.start ?? 0) + 1),
-        message: parsed.error,
-      },
-    ];
+    return {
+      diagnostics: [
+        {
+          start: parsed.start ?? 0,
+          end: parsed.end ?? Math.min(src.length, (parsed.start ?? 0) + 1),
+          message: parsed.error,
+        },
+      ],
+      hints: [],
+    };
   }
   collectSpawnIds(parsed.forms, world);
   const chk = new Checker(world);
   const env: Env = new Map();
 
-  type FnForm = { name: string; form: LispVal; params: Params; body: LispVal[] };
+  type FnForm = {
+    name: string;
+    nameForm: LispVal;
+    form: LispVal;
+    params: Params;
+    body: LispVal[];
+    paramsForm: LispVal;
+  };
   const fnForms: FnForm[] = [];
-  const onForms: { event: string; form: LispVal; params: Params; body: LispVal[] }[] = [];
+  const onForms: {
+    event: string;
+    form: LispVal;
+    params: Params;
+    body: LispVal[];
+    paramsForm: LispVal;
+  }[] = [];
   const boot: LispVal[] = [];
 
   for (const form of parsed.forms) {
@@ -1416,7 +1668,7 @@ export function checkScript(src: string, world: TypeWorld): Diagnostic[] {
       }
       try {
         const params = parseParams(paramsForm, "on");
-        onForms.push({ event: ev.v, form, params, body: form.v.slice(3) });
+        onForms.push({ event: ev.v, form, params, body: form.v.slice(3), paramsForm });
       } catch (e) {
         chk.err(form, e instanceof Error ? e.message : "bad on");
       }
@@ -1429,7 +1681,14 @@ export function checkScript(src: string, world: TypeWorld): Diagnostic[] {
       }
       try {
         const params = parseParams(form.v[2], "def");
-        fnForms.push({ name: form.v[1].v, form, params, body: form.v.slice(3) });
+        fnForms.push({
+          name: form.v[1].v,
+          nameForm: form.v[1],
+          form,
+          params,
+          body: form.v.slice(3),
+          paramsForm: form.v[2],
+        });
       } catch (e) {
         chk.err(form, e instanceof Error ? e.message : "bad def");
       }
@@ -1459,10 +1718,7 @@ export function checkScript(src: string, world: TypeWorld): Diagnostic[] {
     for (const [name, list] of byName) {
       const arrows: Arrow[] = [];
       for (const f of list) {
-        const e = new Map(env);
-        chk.bindParams(f.params, e);
-        const ret = chk.forms(f.body, e);
-        arrows.push(chk.arrowFrom(f.params, e, ret));
+        arrows.push(chk.typeClause(f.params, f.body, env, f.paramsForm));
       }
       chk.fns.set(name, { k: "fn", arrows });
     }
@@ -1471,23 +1727,25 @@ export function checkScript(src: string, world: TypeWorld): Diagnostic[] {
   chk.pass = 0;
   const runBodies = () => {
     for (const f of boot) chk.typeForm(f, env);
-    for (const f of fnForms) {
-      const e = new Map(env);
-      chk.bindParams(f.params, e);
-      chk.forms(f.body, e);
+    typeFnBodies();
+    if (chk.pass === 1) {
+      for (const f of fnForms) {
+        const t = chk.fns.get(f.name);
+        if (t) chk.note(f.nameForm, t, f.name);
+      }
     }
     for (const o of onForms) {
       const e = new Map(env);
       chk.bindParams(o.params, e);
       bindEvent(o.event, o.params, e, world);
+      chk.noteParams(o.paramsForm, e);
       chk.forms(o.body, e);
     }
-    typeFnBodies();
   };
   runBodies();
   chk.pass = 1;
   runBodies();
-  return mergeDiags(chk.diags);
+  return { diagnostics: mergeDiags(chk.diags), hints: chk.hints };
 }
 
 function bindEvent(event: string, params: Params, env: Env, world: TypeWorld) {

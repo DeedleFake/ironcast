@@ -9,7 +9,7 @@ export type LispVal = (
   | { k: "nil" }
   | { k: "sym"; v: string }
   | { k: "list"; v: LispVal[]; vec?: boolean }
-  | { k: "map"; v: Map<string, LispVal> }
+  | { k: "map"; v: Map<string, LispVal>; keySpans?: Map<string, { start: number; end: number }> }
   | { k: "comment"; v: string }
   | { k: "fn"; clauses: Clause[]; keys: string[]; env: Env }
 ) & { cmt?: string; blank?: boolean; broke?: boolean; span?: { start: number; end: number } };
@@ -147,8 +147,13 @@ export function sym(v: string): LispVal {
 export function list(v: LispVal[], vec = false): LispVal {
   return vec ? { k: "list", v, vec: true } : { k: "list", v };
 }
-export function mapFrom(entries: Iterable<[string, LispVal]>): LispVal {
-  return { k: "map", v: new Map(entries) };
+export function mapFrom(
+  entries: Iterable<[string, LispVal]>,
+  keySpans?: Map<string, { start: number; end: number }>,
+): LispVal {
+  const m: Extract<LispVal, { k: "map" }> = { k: "map", v: new Map(entries) };
+  if (keySpans?.size) m.keySpans = keySpans;
+  return m;
 }
 
 export function truthy(v: LispVal): boolean {
@@ -540,6 +545,7 @@ function finishBracket(xs: LispVal[]): LispVal {
     return mapFrom([]);
   }
   const pairs: [string, LispVal][] = [];
+  const keySpans = new Map<string, { start: number; end: number }>();
   let i = 0;
   let keys = 0;
   while (i < items.length) {
@@ -548,7 +554,9 @@ function finishBracket(xs: LispVal[]): LispVal {
       keys += 1;
       const val = items[i + 1];
       if (!val || isKeySym(val)) throw new LispError("map key needs a value");
-      pairs.push([a.v.slice(0, -1), val]);
+      const name = a.v.slice(0, -1);
+      pairs.push([name, val]);
+      if (a.span) keySpans.set(name, a.span);
       i += 2;
     } else {
       i += 1;
@@ -558,7 +566,7 @@ function finishBracket(xs: LispVal[]): LispVal {
   if (keys * 2 !== items.length) {
     throw new LispError("a map cannot mix keys and other items");
   }
-  return mapFrom(pairs);
+  return mapFrom(pairs, keySpans);
 }
 
 function read(p: { s: string; i: number }): LispVal {

@@ -206,7 +206,10 @@ function Types() {
     <div className="space-y-4">
       <Block>
         <H>Values</H>
-        <p>A value has one type. The types are listed here.</p>
+        <p>
+          A value has one type. The types are listed here. Hover a name in
+          the script to see its type at that point.
+        </p>
       </Block>
       <Block>
         <H>Number</H>

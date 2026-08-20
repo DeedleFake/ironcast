@@ -108,6 +108,23 @@ If the map has `door-cell` and the script contains `(spawn … [id: "warden"])`:
 id() = "player" or "door-cell" or "warden" or …
 ```
 
+When a union of those names is long, the checker writes `id()` instead of listing them. It does **not** use `id()` for other long unions of exact text.
+
+### `wall_type()`, `thing_type()`, `shape_type()`
+
+These are fixed unions of exact text. They do not depend on the map.
+
+```
+wall_type()   = "empty" or "tech-panel" or "blood-brick" or "rust-metal"
+                or "circuit" or "stone" or "hazard"
+thing_type()  = "enemy" or "ammo" or "health" or "exit"
+                or "door" or "teleport" or "pickup" or "button"
+shape_type()  = "diamond" or "square" or "star" or "explosion"
+                or "circle" or "triangle" or "cross"
+```
+
+A command that wants a wall type requires `wall_type() or unknown_string()`. `"stone"` is in `wall_type()`. `"lair"` is not, and is not `unknown_string()`, so it is an error. `(str "tech-" x)` is `unknown_string()` and is accepted.
+
 ### Names and places
 
 These names are aliases used in the rest of this document. They are not extra kinds of value.
@@ -285,16 +302,17 @@ In a parameter list, `target:` binds the keyword `target` to the name `target`. 
 ## Other aliases
 
 ```
-thing    = "enemy" or "ammo" or "health" or "exit"
-           or "door" or "teleport" or "pickup" or "button"
-           or unknown_string()
-wall     = "empty" or "tech-panel" or "blood-brick" or "rust-metal"
-           or "circuit" or "stone" or "hazard"
-           or unknown_string()
+thing_type()  = "enemy" or "ammo" or "health" or "exit"
+                or "door" or "teleport" or "pickup" or "button"
+wall_type()   = "empty" or "tech-panel" or "blood-brick" or "rust-metal"
+                or "circuit" or "stone" or "hazard"
+shape_type()  = "diamond" or "square" or "star" or "explosion"
+                or "circle" or "triangle" or "cross"
+
+thing    = thing_type() or unknown_string()
+wall     = wall_type() or unknown_string()
 variant  = "grunt" or "bruiser" or unknown_string()
-shape    = "diamond" or "square" or "star" or "explosion"
-           or "circle" or "triangle" or "cross"
-           or unknown_string()
+shape    = shape_type() or unknown_string()
 color    = number() or string() or unknown_string()
 stringy  = string() or unknown_string()
 mapy     = empty_map() or a map
@@ -321,10 +339,12 @@ Allowed only at the top of the script. Defines a function `name`. Several `def` 
 
 | Kind of parameter | Argument type of that clause |
 | --- | --- |
-| Bind, such as `n` or `target:` | Starts as `dynamic(any())`. After the body is typed, the argument type is the inferred type of that name. If the body never constrains it, it stays `dynamic(any())`. If the body uses it as a number, it becomes `dynamic(number())`. |
+| Bind, such as `n` or `target:` | Starts as `dynamic(any())`. The body is typed once to collect uses, then those names are updated. If the body never constrains a name, it stays `dynamic(any())`. If the body uses it as a number (for example `(- n 1)`), it becomes `number()`. If the body uses it as a place (for example `(set-wall place …)` or `(spawn-fill target …)`), it becomes that place type. A name bound by `let` is updated the same way after the `let` body is typed. Every use of that name, including earlier ones, then has that type. |
 | Literal, such as `0` or `"server"` | The type of that literal. `0` is `number()`. `"server"` is `"server"`. The body does not change this. |
 
-So `(0)` and `(n)` do **not** always have the same argument type. They have the same type when `n` is inferred to `number()` (or `dynamic(number())`) and the literal `0` is typed as `number()`. If `n` is unused, the bind clause accepts `dynamic(any())` and the `(0)` clause still requires `number()`.
+So `(0)` and `(n)` do **not** always have the same argument type. They have the same type when `n` is inferred to `number()` and the literal `0` is typed as `number()`. If `n` is unused, the bind clause accepts `dynamic(any())` and the `(0)` clause still requires `number()`. A use only inside one branch of `if` does not constrain the parameter for the whole clause.
+
+When two clauses print the same arrow, the type of the function shows that arrow once.
 
 The result of a clause is the type of the last form in `body`. An empty body is `nil`.
 
@@ -714,11 +734,11 @@ The player is a thing with id `"player"`. Health, ammo, inventory, and pose are 
 | Call | Arguments | Result |
 | --- | --- | --- |
 | `(set-wall place fields)` | `place`, map | `bool()` |
-| `(get-wall place)` | `place` | `[type: wall, color: color, floor: color, ceiling: color]` |
-| `(get-wall place attr)` | `place`, `"type"` or `"color"` or `"floor"` or `"ceiling"` | `wall` for `"type"`, `color` otherwise |
+| `(get-wall place)` | `place` | `[type: wall_type() or unknown_string(), color: color, floor: color, ceiling: color]` |
+| `(get-wall place attr)` | `place`, `"type"` or `"color"` or `"floor"` or `"ceiling"` | `wall_type() or unknown_string()` for `"type"`, `color` otherwise |
 | `(update-wall place field f)` | `place`, those four names, `fn` | `bool()` |
 
-`fields` for `set-wall` may have: `type`, `color`, `floor`, `ceiling`. `type` must fit `wall`. Other keys are an error. At least one field is required at run time.
+`fields` for `set-wall` may have: `type`, `color`, `floor`, `ceiling`. `type` must fit `wall_type() or unknown_string()`. Other keys are an error. At least one field is required at run time.
 
 If `attr` is exact text that is not one of those four names, that is an error. If `attr` is `unknown_string()`, the result is `dynamic(any())`.
 
@@ -738,6 +758,6 @@ Top-level forms that are not `def` or `on` are a boot body. They run when the fi
 
 ## Editor
 
-The checker waits about 1.5 seconds after the last edit. Overlapping marks join into one mark. The message is a tooltip on the mark. The line under the editor lists messages.
+The checker waits a short time after the last edit. Hover a name in the script to see its type at that point. Overlapping marks join into one mark. The message is a tooltip on the mark. Next to Script, a count shows how many errors there are.
 
 Parse errors and type errors use the same marks.

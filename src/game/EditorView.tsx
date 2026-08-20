@@ -33,7 +33,7 @@ import { ExportMenu, ImportMenu } from "./FileMenu";
 import { ScriptEditor } from "./ScriptEditor";
 import { ScriptHelp } from "./ScriptHelp";
 import { sfx } from "./audio";
-import { checkScript, worldFromLevel, type Diagnostic } from "./typesys";
+import { checkScript, worldFromLevel, type Diagnostic, type TypeHint } from "./typesys";
 import {
   ArrowLeft,
   BoxSelect,
@@ -342,6 +342,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
   const [scriptW, setScriptW] = useState(400);
   const [helpOpen, setHelpOpen] = useState(false);
   const [scriptDiags, setScriptDiags] = useState<Diagnostic[]>([]);
+  const [scriptHints, setScriptHints] = useState<TypeHint[]>([]);
   const [cellSize, setCellSize] = useState(22);
   const [status, setStatus] = useState("");
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -441,8 +442,10 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
 
   useEffect(() => {
     const t = window.setTimeout(() => {
-      setScriptDiags(checkScript(level.script ?? "", worldFromLevel(level)));
-    }, 1500);
+      const r = checkScript(level.script ?? "", worldFromLevel(level));
+      setScriptDiags(r.diagnostics);
+      setScriptHints(r.hints);
+    }, 220);
     return () => window.clearTimeout(t);
   }, [level]);
 
@@ -2091,6 +2094,7 @@ export function EditorView({ initial, onExit, onPlay }: Props) {
                 onChange={(src) => setLevel((l) => ({ ...l, script: src }))}
                 onHelp={() => setHelpOpen(true)}
                 diagnostics={scriptDiags}
+                hints={scriptHints}
               />
             </div>
           </div>
