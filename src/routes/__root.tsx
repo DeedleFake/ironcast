@@ -5,9 +5,8 @@ import appCss from "../styles.css?url";
 
 const APP_NAME = "Ironcast";
 const host = import.meta.env.VITE_PUBLIC_HOSTNAME;
-const ogImage = host
-  ? `https://og.grok.me/v1/card.png?host=${encodeURIComponent(host)}&title=${encodeURIComponent(APP_NAME)}`
-  : undefined;
+const ogImage = host ? `https://${host}/og.jpg` : undefined;
+const xBanner = host ? `https://${host}/x-banner.jpg` : undefined;
 
 export const Route = createRootRoute({
   head: () => ({
@@ -27,6 +26,7 @@ export const Route = createRootRoute({
             { property: "og:image:height", content: "630" },
           ]
         : []),
+      ...(xBanner ? [{ property: "x:game:image", content: xBanner }] : []),
     ],
     links: [
       { rel: "stylesheet", href: appCss },
