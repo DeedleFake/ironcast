@@ -296,7 +296,7 @@ export function createNightVaultLevel(): GameLevel {
     (announce "Movement in the hall!")))
 
 (on enter (zone: "pad-in")
-  (if (has "key-card")
+  (if (get-attr "player" ["inventory" "key-card"])
     (if not (get-prop "hopped")
       (set-prop "hopped" true)
       (teleport "player" "stash")
@@ -307,7 +307,7 @@ export function createNightVaultLevel(): GameLevel {
 (on die (enemy: "warden")
   (after 1
     (set-attr "door-exit" [locked: false open: true])
-    (give "ammo" 20)
+    (update-attr "player" "ammo" (fn (n) (+ n 20)))
     (announce "Exit bolt released.")))
 
 (on hurt (target: "player")

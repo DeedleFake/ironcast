@@ -14,6 +14,7 @@ import {
   defaultWallColor,
   hexFromColor,
   parsePickupShape,
+  PLAYER_ID,
   seedWallColors,
   texFromWallName,
   uid,
@@ -43,6 +44,7 @@ import {
   type Host,
   type LispVal,
   type Program,
+  type AttrPatch,
 } from "./lisp";
 
 export type GameMode = "playing" | "paused" | "won" | "dead";
@@ -98,7 +100,7 @@ export interface GameState {
   fireCd: number;
   zBuffer: Float64Array;
   planeLen: number;
-  inventory: Set<string>;
+  inventory: Map<string, number>;
   flags: Map<string, LispVal>;
   script: Program | null;
   scriptEnv: Env;
@@ -205,7 +207,7 @@ export function createGameState(level: GameLevel): GameState {
     fireCd: 0,
     zBuffer: new Float64Array(1),
     planeLen: 0.66,
-    inventory: new Set(),
+    inventory: new Map(),
     flags: new Map(),
     script: compiled && compiled.ok ? compiled.program : null,
     scriptEnv: makeEnv(null),
@@ -285,6 +287,41 @@ function nextSpawnId(state: GameState, type: string): string {
 function findNamed(state: GameState, name: string): LiveEntity | undefined {
   if (!name) return undefined;
   return state.entities.find((e) => e.alive && e.id === name);
+}
+
+function playerAttrMap(state: GameState): LispVal {
+  return mapFrom([
+    ["id", str(PLAYER_ID)],
+    ["type", str(PLAYER_ID)],
+    ["health", num(state.health)],
+    ["ammo", num(state.ammo)],
+    [
+      "inventory",
+      mapFrom([...state.inventory.entries()].map(([k, n]) => [k, num(n)])),
+    ],
+    ["x", num(state.px)],
+    ["y", num(state.py)],
+    ["angle", num(state.angle)],
+  ]);
+}
+
+function setPlayerAttr(state: GameState, patch: AttrPatch): boolean {
+  if (patch.health !== undefined) {
+    state.health = Math.max(0, Math.min(200, patch.health));
+    if (state.health <= 0 && state.mode === "playing") {
+      state.health = 0;
+      state.mode = "dead";
+      pushSay(state, "YOU DIED");
+    }
+  }
+  if (patch.ammo !== undefined) {
+    state.ammo = Math.max(0, Math.min(MAX_AMMO, Math.floor(patch.ammo)));
+  }
+  if (patch.inventory) state.inventory = new Map(patch.inventory);
+  if (patch.x !== undefined) state.px = patch.x;
+  if (patch.y !== undefined) state.py = patch.y;
+  if (patch.angle !== undefined) setAngle(state, patch.angle);
+  return true;
 }
 
 function entityAttrMap(e: LiveEntity): LispVal {
@@ -733,7 +770,7 @@ function updatePickups(state: GameState) {
     } else if (e.type === "pickup") {
       e.alive = false;
       sfx.pickup();
-      if (e.id) state.inventory.add(e.id);
+      if (e.id) state.inventory.set(e.id, (state.inventory.get(e.id) ?? 0) + 1);
       runScript(state, "pickup", { target: str(e.id) });
     } else if (e.type === "teleport") {
       if (state.teleportCd > 0 || !e.dest) continue;
@@ -876,38 +913,12 @@ function makeHost(state: GameState): Host {
     say: (msg) => {
       pushSay(state, msg);
     },
-    give: (what, n) => {
-      if (what === "ammo") {
-        state.ammo = Math.min(MAX_AMMO, state.ammo + (n ?? 15));
-        return true;
-      }
-      if (what === "health") {
-        state.health = Math.min(200, state.health + (n ?? 25));
-        return true;
-      }
-      state.inventory.add(what);
-      return true;
-    },
-    take: (what, n) => {
-      if (what === "ammo") {
-        state.ammo = Math.max(0, state.ammo - (n ?? 1));
-        return true;
-      }
-      if (what === "health") {
-        state.health = Math.max(0, state.health - (n ?? 1));
-        return true;
-      }
-      return state.inventory.delete(what);
-    },
-    has: (what) => {
-      if (what === "ammo") return state.ammo > 0;
-      return state.inventory.has(what);
-    },
     getVar: (key) => state.flags.get(key) ?? nil(),
     setVar: (key, val) => {
       state.flags.set(key, val);
     },
     setAttr: (id, patch) => {
+      if (id === PLAYER_ID) return setPlayerAttr(state, patch);
       const e = findNamed(state, id);
       if (!e) return false;
       if (patch.locked !== undefined) e.locked = patch.locked;
@@ -919,36 +930,16 @@ function makeHost(state: GameState): Host {
       if (patch.shape !== undefined) {
         e.shape = parsePickupShape(patch.shape) ?? DEFAULT_PICKUP_SHAPE;
       }
+      if (patch.variant !== undefined) {
+        e.variant = patch.variant === "bruiser" ? "bruiser" : "grunt";
+      }
       return true;
     },
-    getAttr: (id, attr) => {
+    getAttr: (id) => {
+      if (id === PLAYER_ID) return playerAttrMap(state);
       const e = findNamed(state, id);
       if (!e) return undefined;
-      if (!attr) return entityAttrMap(e);
-      switch (attr) {
-        case "locked":
-          return bool(e.locked);
-        case "open":
-          return bool(e.open);
-        case "disabled":
-          return bool(e.disabled);
-        case "dest":
-          return e.dest ? str(e.dest) : nil();
-        case "label":
-          return e.label ? str(e.label) : nil();
-        case "color":
-          return str(hexFromColor(e.color));
-        case "shape":
-          return str(e.shape);
-        case "variant":
-          return str(e.variant);
-        case "type":
-          return str(e.type);
-        case "id":
-          return e.id ? str(e.id) : nil();
-        default:
-          return nil();
-      }
+      return entityAttrMap(e);
     },
     setWall: (opts) => {
       const cells: { x: number; y: number }[] = [];
@@ -1045,6 +1036,7 @@ function makeHost(state: GameState): Host {
       return nil();
     },
     spawn: (opts) => {
+      if (opts.id?.trim() === PLAYER_ID) return null;
       const cells = collectPlaceCells(state, opts.places);
       if (!cells) return null;
       const put = (x: number, y: number) => {

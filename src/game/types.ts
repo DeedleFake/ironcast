@@ -2,6 +2,9 @@
 
 export const LEVEL_VERSION = 1 as const;
 
+/** Reserved script id of the player. Nothing else may use this name. */
+export const PLAYER_ID = "player";
+
 export const MAP_MIN = 5;
 export const MAP_MAX = 64;
 
@@ -359,6 +362,9 @@ export function levelIssues(level: GameLevel): string[] {
   const add = (id?: string) => {
     const v = id?.trim();
     if (!v) return;
+    if (v === PLAYER_ID && !seen.has(v)) {
+      issues.push(`id “${PLAYER_ID}” is reserved`);
+    }
     seen.set(v, (seen.get(v) ?? 0) + 1);
   };
   for (const e of level.entities) add(e.id);

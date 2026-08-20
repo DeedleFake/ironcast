@@ -1,38 +1,58 @@
 # Script types
 
-This is the type system for map scripts. Read it as the contract. The editor checker implements this. Where the checker is still looser than the contract, the text says so.
+This document is the type system for Ironcast map scripts. It is a reference. It does not assume prior work on this project. It does assume the script language in the in-editor tutorial.
 
-You do not write types in a script. The checker infers them. It runs about 1.5 seconds after you stop typing. It marks the bad text. Hover a mark, or put the caret on it, to read the message.
+A script contains no type annotations. The checker infers types from literals, from built-in commands, and from the current map. The editor runs the checker about 1.5 seconds after the last edit and marks text that cannot be right.
 
-**Rule.** The checker reports an error only when a value **cannot** be what a command needs. If the value might still be right, the checker stays quiet.
+---
 
-A value of type `A` is accepted where type `B` is needed when `A` and `B` share at least one possible value. That shared part is the type used after the check.
+## Checking
+
+Two relations are used.
+
+**Subtype** (`A` is a subtype of `B`): every value of `A` is a value of `B`. Written `A ⊆ B`. This is the “will work” relation.
+
+**Intersection** (`A ∩ B`): the values that belong to both `A` and `B`. If the intersection is `none()`, the two types have no value in common.
+
+A value of type `A` is accepted where type `B` is required as follows:
+
+| `A` | Accepted where `B` is required when |
+| --- | --- |
+| Not wrapped in `dynamic` | `A ⊆ B` (it **will** work) |
+| `dynamic(T)` | `T ∩ B` is not `none()` (it **might** work) |
+
+After a successful use of `dynamic(T)` where `B` is required, the type of that use is `dynamic(T ∩ B)`. The wrapper is kept. The inner type may shrink.
 
 ```
-(+ 1 2)              ; 1 is number(), + needs number(). Fine.
-(+ 1 "x")            ; "x" and number() share nothing. Error.
-(+ 1 (get-prop "n")) ; get-prop is dynamic(number() or nil).
-                     ; That shares number() with +. Fine.
+(+ 1 2)                 ; number() ⊆ number(). Will work.
+(+ 1 "x")               ; "x" ⊆ number()? No. Error.
+(+ 1 (get-prop "n"))    ; get-prop is dynamic(number() or nil).
+                        ; (number() or nil) ∩ number() = number().
+                        ; Might work. Allowed.
 ```
+
+`any()` is not accepted where `number()` is required: `any()` is not a subtype of `number()`. `dynamic(any())` is accepted there: `any() ∩ number() = number()`.
 
 ---
 
 ## Types
 
-A type is a set of values. This is every type the checker has.
+A type is a set of values.
 
-### Bottom and top
+### `none()` and `any()`
 
-| Type | Meaning |
-| --- | --- |
-| `none()` | The empty set. No value has this type. A check that lands here is an error. |
-| `any()` | Every value. Accepted everywhere. A parameter starts as `any()` until the body tightens it. |
+| Type | Values | Notes |
+| --- | --- | --- |
+| `none()` | No values | The empty set. A check that requires a non-empty intersection and gets `none()` is an error. |
+| `any()` | Every value | Top type. Everything is a subtype of `any()`. `any()` is a subtype only of `any()`. |
 
-### Nil
+`any()` is **not** accepted everywhere. A command that requires `number()` rejects `any()`, because that value might not be a number. Use `dynamic(any())` for a value that has not been constrained yet (for example an unannotated parameter). That form is accepted wherever some value would work.
+
+### `nil`
 
 | Type | Values |
 | --- | --- |
-| `nil` | Only `nil`. |
+| `nil` | Only `nil` |
 
 `nil` is false in `if`, `and`, `or`, and `not`.
 
@@ -40,72 +60,83 @@ A type is a set of values. This is every type the checker has.
 
 | Type | Values |
 | --- | --- |
-| `true` | Only `true`. |
-| `false` | Only `false`. |
-| `bool()` | `true` and `false`. |
+| `true` | Only `true` |
+| `false` | Only `false` |
+| `bool()` | `true` and `false` |
 
-`true` and `false` are subsets of `bool()`. `false` is false in `if`. `true` is true in `if`.
+`true ⊆ bool()` and `false ⊆ bool()`. `false` is false in `if`. `true` is true in `if`.
 
 ### Numbers
 
 | Type | Values |
 | --- | --- |
-| `number()` | Every number. |
+| `number()` | Every number |
 
-The checker does **not** keep exact numbers. `0` and `3.5` are both `number()`. A clause `(0)` and a clause `(n)` have the same argument type.
+Exact numbers are not types. `0` and `3.5` both have type `number()`. A pattern `(0)` therefore has argument type `number()`, not “the number zero”. Runtime still matches only `0`.
 
 ### Strings
 
 | Type | Values |
 | --- | --- |
-| `"door-cell"` | Only that exact text. |
-| `unknown_string()` | A string whose text the checker cannot name. |
-| `string()` | Every string: every exact text, and `unknown_string()`. |
+| `"door-cell"` | Only that exact text |
+| `unknown_string()` | A string whose text is not known |
+| `string()` | Every string: every exact text, and `unknown_string()` |
 
-Exact text is **not** a subtype of `unknown_string()`. They only meet under `string()`.
-
-```
-"a" and "a"                 ; same type
-"a" and "b"                 ; share nothing
-"a" and unknown_string()    ; share nothing
-"a" and string()            ; share "a"
-unknown_string() and string() ; share unknown_string()
-```
-
-`(str "a" "b")` is `"ab"`. If any part is not exact text, the result is `unknown_string()`.
-
-### Names on this map
-
-`id()` is not a separate kind of value. It is the union of the exact strings that name things, marks, and zones on **this** map, plus names created by `spawn` / `spawn-fill` when `id:` is exact text.
-
-If the map has `door-cell` and `panel`:
+Exact text is a subtype of `string()`. `unknown_string()` is a subtype of `string()`. Exact text is **not** a subtype of `unknown_string()`. `unknown_string()` is **not** a subtype of any exact text.
 
 ```
-id() = "door-cell" or "panel"
+"a" ∩ "a"                 = "a"
+"a" ∩ "b"                 = none()
+"a" ∩ unknown_string()    = none()
+"a" ∩ string()            = "a"
+unknown_string() ∩ string() = unknown_string()
 ```
 
-A command that wants a name accepts:
+`(str "a" "b")` has type `"ab"`. If any argument is not exact text, the result is `unknown_string()`.
+
+### `id()`
+
+`id()` is the union of exact strings that name things, marks, and zones on the current map, plus exact `id:` strings passed to `spawn` or `spawn-fill` anywhere in the script, plus `"player"`.
+
+Collection is **not** order-dependent. The whole script is scanned first. Every occurrence of `id()` in the script, including uses that appear before the `spawn` in source, includes those names.
+
+`"player"` is always a member of `id()`. It is the player. Nothing else may use that name: the editor, map load, `spawn`, and `spawn-fill` all reject it.
+
+If the map has `door-cell` and the script contains `(spawn … [id: "warden"])`:
 
 ```
-name = id() or unknown_string()
+id() = "player" or "door-cell" or "warden" or …
 ```
 
-| Value | Against `name` |
+### Names and places
+
+These names are aliases used in the rest of this document. They are not extra kinds of value.
+
+```
+name   = id() or unknown_string()
+point  = [number() number()]
+place  = name or point or list(name or point)
+```
+
+A command that requires `name` accepts:
+
+| Value | Why |
 | --- | --- |
-| `"door-cell"` (on the map) | Fine. Shares `"door-cell"`. |
-| `"door-cel"` (not on the map) | Error. Exact text that is not in `id()`, and not `unknown_string()`. |
-| `(str "door-" x)` | Fine. That is `unknown_string()`. |
-| `(spawn … [id: "warden"])` | The result is `"warden"`. That name is added to `id()` for the rest of the script. |
+| `"door-cell"` when that string is in `id()` | `"door-cell" ⊆ id() ⊆ name` |
+| `"player"` | Always in `id()`. |
+| `"door-cel"` when that string is not in `id()` | Not a subtype of `id()` or of `unknown_string()`. Error. |
+| `(str "door-" x)` | Type `unknown_string()`, which is a subtype of `name`. |
+| `(spawn … [id: "warden"])` | Result `"warden"`, and `"warden"` is a member of `id()`. |
 
-`"player"` is a name only for `teleport` and for the `hurt` event. It is not in `id()`.
+`hurt`, `shoot`, `use`, and `pickup` may also pass `""` as `target` when there is no name. `remove` does not accept `"player"` (will not work). `dynamic` of a name may still try `remove` and fail at run time.
 
 ### Lists
 
 | Type | Values |
 | --- | --- |
-| `empty_list()` | Only `[]`. |
-| `[T1 T2 … Tn]` | A list of length `n` whose slots have those types. |
-| `list(T)` | A list of any length whose items have type `T`. Includes `[]`. |
+| `empty_list()` | Only `[]` |
+| `[T1 T2 … Tn]` | Lists of length `n` whose slots have those types |
+| `list(T)` | Lists of any length whose items have type `T`, including `[]` |
 
 ```
 []              ; empty_list()
@@ -114,19 +145,19 @@ name = id() or unknown_string()
 (rest [1 2 3])  ; [number() number()]
 ```
 
-`empty_list()` meets `list(T)`. It does not meet a fixed-length `[T1 T2]`.
+`empty_list() ⊆ list(T)` for every `T`. `empty_list()` is not a subtype of a fixed-length `[T1 T2]`.
 
-Two fixed lists meet only when they have the same length and each slot meets.
+`[T1 T2 … Tn] ⊆ list(U)` when each `Ti ⊆ U`. Two fixed-length lists are related only when they have the same length and each slot is a subtype of the corresponding slot.
 
 ### Maps
 
-Keys are always strings. The checker tracks a type per **known** key. A map may also have a rest type `*: T` for unknown keys.
+Keys are strings. The checker tracks a type per known key. A map may also have a rest type `*: T` for unknown keys.
 
 | Type | Values |
 | --- | --- |
-| `empty_map()` | Only `[:]`. |
-| `[a: Ta b: Tb]` | A map that has those keys with those types. |
-| `[a: Ta *: T]` | Those known keys, plus other keys of type `T`. |
+| `empty_map()` | Only `[:]` |
+| `[a: Ta b: Tb]` | Maps that have (at least) those keys with those types |
+| `[a: Ta *: T]` | Those known keys, plus other keys of type `T` |
 
 ```
 [:]                     ; empty_map()
@@ -135,50 +166,28 @@ Keys are always strings. The checker tracks a type per **known** key. A map may 
 (merge [a: 1] [b: "x"]) ; [a: number() b: "x"]
 ```
 
-`(merge a b)` keeps keys from both. On the same key, `b` wins.
+`(merge a b)` keeps keys from both maps. On the same key, `b` wins.
 
-`empty_map()` meets a map with no known keys. It does not meet `[a: T]`.
+`(get m k)` and `(set m k v)` take `k` as a string or as a list of strings (a path). `(get m ["a" "b"])` walks nested maps. A missing key is `nil`. A non-map in the middle of a path is an error.
+
+`(set m k nil)` deletes that key. `(set m ["a" "b"] 1)` creates missing maps in the middle.
+
+`(update m k f)` reads the key (or `nil` if missing), calls `f` with that value, and writes the result. If `f` returns `nil`, the key is deleted.
+
+`empty_map()` is a subtype of a map with no known keys. It is not a subtype of `[a: T]`.
 
 ### Functions
 
-| Type | Values |
-| --- | --- |
-| `fn` | A function. Printed as `fn`. Internally it is a list of arrows. |
-
-An arrow is one clause:
+A function type is a list of **arrows**, one per clause. The printed form is `fn`.
 
 ```
-(number()) -> nil
+(number()) -> number()
 (target: "panel") -> nil
 ```
 
-The type of a function is **all** of its arrows at once. It is not one combined arrow.
+The type of a function is all of its arrows at once. It is not one combined arrow. `int → int` together with `string → string` is not `(int or string) → (int or string)`.
 
-```
-; This function
-(def announce (msg) (say (str ">> " msg)))
-
-; is
-(any()) -> nil
-; then the body uses msg with str, so it tightens to
-(string() or unknown_string() or …) -> nil
-; in practice, msg starts as any() and str accepts it.
-```
-
-Two clauses:
-
-```
-(def explode (target: "server") …)
-(def explode (target:) …)
-
-; arrows
-(target: "server") -> …
-(target: any()) -> …
-```
-
-A call matches an arrow when the arguments share values with that arrow. If several arrows match, the result is `dynamic(union of those results)`. If none match, that is an error.
-
-Keyword arrows also accept a missing key as `nil`.
+A call matches an arrow when the arguments fit that arrow (will-work or might-work, same rule as above). Missing keyword arguments are treated as `nil`. If several arrows match, the result is `dynamic(union of those results)`. If none match, the call is an error.
 
 ### Unions
 
@@ -186,60 +195,30 @@ Keyword arrows also accept a missing key as `nil`.
 A or B or C
 ```
 
-A value of a union is a value of at least one member. A union meets `B` when any member meets `B`. The shared part is that member (or the union of the members that meet).
+A value of a union is a value of at least one member. `A or B ⊆ C` when `A ⊆ C` and `B ⊆ C`. `(A or B) ∩ C` is `(A ∩ C) or (B ∩ C)`.
 
-`any()` in a union collapses the whole union to `any()`. `none()` members are dropped.
+A union that contains `any()` is `any()`. Members that are `none()` are dropped. A union of one member is that member.
 
 ### `dynamic(T)`
 
-This is the part that was missing.
+`dynamic(T)` is not a larger set of values than `T`. The values are exactly the values of `T`. The wrapper records that the checker **has not proved** which member of `T` the value is.
 
-`dynamic(T)` is not a new set of values. The values are the same as `T`. The wrapper means: **the checker cannot prove that the value is a specific member of `T`. Treat uses as “might be any member of `T`.”**
+Static types use the subtype rule (will work). `dynamic` uses the intersection rule (might work).
 
-#### Check
+| Value type | Required | Intersection | Decision | Type of the use |
+| --- | --- | --- | --- | --- |
+| `number()` | `number()` | `number()` | Will work | `number()` |
+| `any()` | `number()` | `number()` | Will not work (`any() ⊈ number()`) | error |
+| `dynamic(any())` | `number()` | `number()` | Might work | `dynamic(number())` |
+| `number() or nil` | `number()` | `number()` | Will not work (`number() or nil ⊈ number()`) | error |
+| `dynamic(number() or nil)` | `number()` | `number()` | Might work | `dynamic(number())` |
+| `dynamic(number() or nil)` | `string()` | `none()` | Cannot work | error |
+| `nil` | `number()` | `none()` | Cannot work | error |
+| `"door-cel"` | `name` | `none()` | Cannot work | error |
 
-When a command needs `B` and the value is `dynamic(T)`:
+`dynamic` never makes an impossible use legal. It only allows uses that are possible for some member of `T`.
 
-1. Look at `T`, not at the wrapper.
-2. Find the shared part of `T` and `B`.
-3. If that part is `none()`, error.
-4. If it is some `S`, the use is fine. The type of **that use** stays `dynamic(S)`.
-
-The same three steps also run for a plain union `T`. The difference is step 4.
-
-| Value type | Needed | Shared | Type after the use |
-| --- | --- | --- | --- |
-| `number() or nil` | `number()` | `number()` | `number()` |
-| `dynamic(number() or nil)` | `number()` | `number()` | `dynamic(number())` |
-| `dynamic(number() or nil)` | `string()` | `none()` | error |
-| `nil` | `number()` | `none()` | error |
-
-So `dynamic` does **not** make a bad use legal. `(+ "x" 1)` is still an error. `dynamic` stops the checker from pretending a later use is a tighter type than it proved.
-
-That is why `get-prop` returns `dynamic`. `(get-prop "hits")` might be `nil` (never written yet, or written then cleared). It might be `number()` (you wrote a number). Passing it to `+` is legal because it **might** be a number. The checker does not then treat the name `"hits"` as a number forever.
-
-#### Where `dynamic` comes from
-
-| Source | Result |
-| --- | --- |
-| `(get-prop "hits")` after some `(set-prop "hits" …)` | `dynamic(union of those writes or nil)` |
-| `(get-prop k)` when `k` is not exact text | `dynamic(any())` |
-| A call that matches more than one `def` / `fn` / `on` clause | `dynamic(union of those results)` |
-| `(and …)` / `(or …)` | `dynamic(last-arg or false or nil)` |
-| `(map …)` / `(filter …)` | `list(dynamic(any()))` |
-| `(reduce xs init f)` | `dynamic(type of init)` |
-| `(nth xs i)` on a fixed list | `dynamic(slot types or nil)` |
-| `(get m k)` when `k` is not exact text | `dynamic(value types or nil)` |
-| `(set m k v)` when `k` is not exact text | `dynamic` map |
-| `(from-pairs …)` | `dynamic` map |
-| `(first xs)` / `(rest xs)` when `xs` is not a known list | `dynamic(…)` |
-| `(get-attr …)` | `dynamic(any())` today (looser than the field table below) |
-| A failed check, to keep going | `dynamic(needed type)` or `dynamic(any())` |
-| Unknown name | `dynamic(any())` |
-
-`any()` and `none()` are never wrapped. `dynamic(dynamic(T))` is `dynamic(T)`.
-
-#### Worked example
+#### Example
 
 ```
 (on start ()
@@ -249,18 +228,37 @@ That is why `get-prop` returns `dynamic`. `(get-prop "hits")` might be `nil` (ne
   (set-prop "hits" (+ (get-prop "hits") 1)))
 ```
 
-1. The first walk records that `"hits"` is written as `number()`.
-2. `(get-prop "hits")` is `dynamic(number() or nil)`. The `nil` is there because a read can happen before a write, or on a path that never wrote.
-3. `+` needs `number()`. Shared part is `number()`. Fine.
-4. `(set-prop "hits" …)` writes `number()` again.
+1. The whole script is scanned. `"hits"` is written with type `number()`.
+2. `(get-prop "hits")` has type `dynamic(number() or nil)`. The `nil` is included because a read may occur on a path that has not written yet.
+3. `+` requires `number()`. `(number() or nil) ∩ number() = number()`, so the use is allowed. The use has type `dynamic(number())`.
+4. `+` itself returns `number()`. That is written back with `set-prop`.
 
-If nothing ever writes `"hits"`, `(get-prop "hits")` is `nil`, not `dynamic`. Then `(+ (get-prop "hits") 1)` is an error.
+If no `set-prop` writes `"hits"`, `(get-prop "hits")` has type `nil`, not `dynamic`. Then `(+ (get-prop "hits") 1)` is an error: `nil ⊈ number()`.
+
+#### Where `dynamic` is produced
+
+| Source | Result |
+| --- | --- |
+| Unannotated `def` / `fn` / `on` bind parameter | `dynamic(any())` until the body constrains it |
+| `(get-prop "hits")` after writes of `T1`, `T2`, … | `dynamic(T1 or T2 or … or nil)` |
+| `(get-prop k)` when `k` is not exact text | `dynamic(any())` |
+| A call that matches more than one clause | `dynamic(union of those results)` |
+| `(and …)` and `(or …)` | `dynamic(type of last argument or false or nil)` |
+| `(map …)` and `(filter …)` | `list(dynamic(any()))` |
+| `(reduce xs init f)` | `dynamic(type of init)` |
+| `(nth xs i)` on a fixed-length list | `dynamic(slot types or nil)` |
+| `(get m k)` when `k` is not exact text | `dynamic(value types or nil)` |
+| `(set m k v)` when `k` is not exact text | `dynamic` map |
+| `(from-pairs …)` | `dynamic` map |
+| `(first xs)` / `(rest xs)` when `xs` is not a known list | `dynamic(…)` |
+| `(get-attr …)` | `dynamic(any())` (see Things; this is looser than the field table) |
+| Unknown name, or a failed check that continues | `dynamic(any())` or `dynamic(required type)` |
+
+`any()` and `none()` are never needed as inner types of `dynamic` except `dynamic(any())`, which is the unconstrained parameter type. `dynamic(none())` is not used. `dynamic(dynamic(T))` is `dynamic(T)`.
 
 ---
 
 ## Literals and other syntax
-
-Every form the parser accepts, and the type it gets.
 
 | Syntax | Type |
 | --- | --- |
@@ -273,26 +271,20 @@ Every form the parser accepts, and the type it gets.
 | `[a b c]` | `[type of a, type of b, type of c]` |
 | `[:]` | `empty_map()` |
 | `[k: v …]` | `[k: type of v …]` |
-| `; comment` | Ignored. A comment form types as `nil`. |
-| `name` (symbol) | Lookup. `true` / `false` / `nil` as above. Else a parameter, `def`, or error (`unknown name`). |
-| `(f …)` | A call. Type of the result of `f`. |
-| `k:` in a call or param list | A keyword argument name, not a value. |
+| `; comment` | Ignored. A comment form has type `nil`. |
+| `name` (symbol) | Lookup: `true` / `false` / `nil`, else a parameter or `def`. Unknown names are an error. |
+| `(f …)` | Result type of the call |
+| `k:` in a call or parameter list | A keyword name, not a value |
 
 A map cannot mix plain items and `k:` pairs. That is a parse error.
 
-`name:` in a parameter list is a keyword parameter. `(target: "panel")` means: the key `target` must be the exact string `"panel"`. `(target:)` means: bind the key `target` to a name `target`.
+In a parameter list, `target:` binds the keyword `target` to the name `target`. `target: "panel"` matches only when that keyword is the exact string `"panel"`.
 
 ---
 
-## Shared argument types
-
-These names are used below. They are aliases, not extra types.
+## Other aliases
 
 ```
-name     = id() or unknown_string()
-who      = name or "player"
-point    = [number() number()]
-place    = name or point or list(name or point)
 thing    = "enemy" or "ammo" or "health" or "exit"
            or "door" or "teleport" or "pickup" or "button"
            or unknown_string()
@@ -309,13 +301,13 @@ mapy     = empty_map() or a map
 listy    = empty_list() or list(T) or [T1 T2 …]
 ```
 
-Runtime `color` also accepts `"#rrggbb"` and `"#rgb"`. The checker treats any `string()` as a color. A bad hex string is a runtime error, not a type error.
+At run time a color also accepts `"#rrggbb"` and `"#rgb"`. The checker treats any `string()` as a color. A malformed hex string is a run-time error, not a type error.
 
 ---
 
 ## Keywords
 
-Keywords are special forms. They are not called as functions. They do not take `k:` arguments unless the text below says so.
+Keywords are special forms. They are not functions. They do not take `k:` arguments unless stated below.
 
 ### `def`
 
@@ -323,15 +315,20 @@ Keywords are special forms. They are not called as functions. They do not take `
 (def name (params…) body…)
 ```
 
-Only at the top of the script. Defines a function `name`. Several `def` forms with the same `name` must sit next to each other. They are clauses of one function, first match wins.
+Allowed only at the top of the script. Defines a function `name`. Several `def` forms with the same `name` must sit next to each other. They are clauses of one function. The first matching clause at run time wins.
 
-`params` is either all positional (`n`, `0`, `"x"`) or all keyword (`target:`, `target: "server"`). Do not mix.
+`params` is either all positional (`n`, `0`, `"x"`) or all keyword (`target:`, `target: "server"`). Mixing is an error.
 
-A bind parameter starts as `any()`. A literal parameter has the type of that literal. If the body uses a bind as a number, the checker tightens it to `number()`.
+| Kind of parameter | Argument type of that clause |
+| --- | --- |
+| Bind, such as `n` or `target:` | Starts as `dynamic(any())`. After the body is typed, the argument type is the inferred type of that name. If the body never constrains it, it stays `dynamic(any())`. If the body uses it as a number, it becomes `dynamic(number())`. |
+| Literal, such as `0` or `"server"` | The type of that literal. `0` is `number()`. `"server"` is `"server"`. The body does not change this. |
 
-The result of the clause is the type of the last form in `body`. An empty body is `nil`.
+So `(0)` and `(n)` do **not** always have the same argument type. They have the same type when `n` is inferred to `number()` (or `dynamic(number())`) and the literal `0` is typed as `number()`. If `n` is unused, the bind clause accepts `dynamic(any())` and the `(0)` clause still requires `number()`.
 
-A `def` that is not at the top is an error.
+The result of a clause is the type of the last form in `body`. An empty body is `nil`.
+
+A `def` that is not at the top of the script is an error.
 
 ### `fn`
 
@@ -339,7 +336,7 @@ A `def` that is not at the top is an error.
 (fn (params…) body…)
 ```
 
-Same parameter rules as `def`. Result type is `fn` with one arrow. Closures see the names around them.
+Same parameter rules as `def`. The result type is `fn` with one arrow. The function may use names from the enclosing scope.
 
 ### `on`
 
@@ -347,9 +344,11 @@ Same parameter rules as `def`. Result type is `fn` with one arrow. Closures see 
 (on event (params…) body…)
 ```
 
-Only at the top of the script. Same clause rules as `def`. `event` must be one of the events in the event table. Unknown event: error.
+Allowed only at the top of the script. Same clause rules as `def`. `event` must be a name in the event table. An unknown event is an error.
 
-The result of an `on` body is not used.
+The result of an `on` body is discarded.
+
+Event payload keys, when bound without a literal pattern, have the types in the event table (not `dynamic(any())`).
 
 ### `let`
 
@@ -357,12 +356,7 @@ The result of an `on` body is not used.
 (let map body…)
 ```
 
-`map` must be a map (`empty_map()` or `[k: T …]`). Each key becomes a name in `body` with that key’s type. Result is the last form of `body`.
-
-```
-(let [v: (get-prop "hits")]
-  …)   ; v has type dynamic(number() or nil), if hits was written as a number
-```
+`map` must be a map (`empty_map()` or `[k: T …]`), or `dynamic` of a type whose intersection with a map is not `none()`. Each key becomes a name in `body` with that key’s type. The result is the last form of `body`.
 
 ### `if`, `else`, `not` (inside `if`)
 
@@ -382,29 +376,29 @@ Also:
   body…)
 ```
 
-`else` and `else if` are part of this form. They are not functions.
+`else` and `else if` belong to this form. They are not functions.
 
-`test` can be any type. The checker does not require `bool()`. A value is false when it is `nil` or `false`. Everything else is true.
+`test` may have any type. The checker does not require `bool()`. A value is false when it is `nil` or `false`. Every other value is true.
 
-Result type is the union of the branch results.
+The result type is the union of the branch results.
 
-**Narrowing** applies only to a **bound name**, and only inside that `if`.
+Narrowing applies only to a **bound name**, and only inside that `if`.
 
 | Test | True branch | False branch |
 | --- | --- | --- |
-| `v` (a name) | `v` without `nil` and without `false` | `v` as `nil` or `false` |
-| `(str? v)` | `v` meets `string() or unknown_string()` | `v` unchanged |
-| `(num? v)` | `v` meets `number()` | `v` unchanged |
-| `(bool? v)` | `v` meets `bool()` | `v` unchanged |
-| `(nil? v)` | `v` meets `nil` | `v` unchanged |
-| `(list? v)` | `v` meets a list type | `v` unchanged |
-| `(map? v)` | `v` meets a map type | `v` unchanged |
+| `v` (a name) | `v` with `nil` and `false` removed | `v` as `nil` or `false` |
+| `(str? v)` | `v ∩ (string() or unknown_string())` | `v` unchanged |
+| `(num? v)` | `v ∩ number()` | `v` unchanged |
+| `(bool? v)` | `v ∩ bool()` | `v` unchanged |
+| `(nil? v)` | `v ∩ nil` | `v` unchanged |
+| `(list? v)` | `v ∩` a list type | `v` unchanged |
+| `(map? v)` | `v ∩` a map type | `v` unchanged |
 
 `if not` swaps the two columns.
 
 A later `(get-prop "hits")` is a new lookup. It is not narrowed.
 
-The checker does not warn that a branch never runs.
+The checker does not report that a branch never runs.
 
 ### `and`
 
@@ -412,7 +406,7 @@ The checker does not warn that a branch never runs.
 (and a b …)
 ```
 
-Each argument is typed. Result is `dynamic(type of last or false or nil)`.
+Each argument is typed. The result is `dynamic(type of the last argument or false or nil)`.
 
 ### `or`
 
@@ -420,7 +414,7 @@ Each argument is typed. Result is `dynamic(type of last or false or nil)`.
 (or a b …)
 ```
 
-Each argument is typed. Result is `dynamic(type of last or false or nil)`.
+Each argument is typed. The result is `dynamic(type of the last argument or false or nil)`.
 
 ### `not`
 
@@ -428,7 +422,7 @@ Each argument is typed. Result is `dynamic(type of last or false or nil)`.
 (not x)
 ```
 
-`x` can be any type. Result is `bool()`.
+`x` may have any type. The result is `bool()`.
 
 ### `quote`
 
@@ -436,7 +430,7 @@ Each argument is typed. Result is `dynamic(type of last or false or nil)`.
 (quote form)
 ```
 
-Result is the type of `form` as data, without calling it. A quoted symbol is `unknown_string()`. A quoted number is `number()`. And so on. Used by `pipe` internally.
+The result is the type of `form` as data, without calling it. A quoted symbol has type `unknown_string()`. A quoted number has type `number()`. `pipe` uses `quote` internally.
 
 ### `after`
 
@@ -447,9 +441,9 @@ Result is the type of `form` as data, without calling it. A quoted symbol is `un
 | Slot | Type |
 | --- | --- |
 | `seconds` | `number()` |
-| `body` | typed in the same names as the caller |
+| `body` | Typed in the same environment as the caller |
 
-Result is `nil`. The body still counts for `set-prop` writes and for errors.
+The result is `nil`. The body still contributes `set-prop` writes and type errors.
 
 ### `pipe`
 
@@ -457,9 +451,9 @@ Result is `nil`. The body still counts for `set-prop` writes and for errors.
 (pipe value step…)
 ```
 
-Needs a value and at least one step. Result is the type after the last step.
+Requires a value and at least one step. The result is the type after the last step.
 
-Each step is a name `f` or a call `(f extra…)`. The current value is passed as the **first** argument of `f`. Steps cannot use `k:` arguments.
+Each step is a name `f` or a call `(f extra…)`. The current value is the **first** argument of `f`. Steps cannot use `k:` arguments.
 
 ```
 (pipe xs
@@ -467,13 +461,9 @@ Each step is a name `f` or a call `(f extra…)`. The current value is passed as
   (reduce 0 (fn (acc cur) (+ acc cur))))
 ```
 
-`xs` is the first argument of `map`. The list from `map` is the first argument of `reduce`.
-
 ---
 
 ## Events
-
-Payload keys and their types. A missing key at run time is `nil`. The checker types a bind of that key as the payload type.
 
 | Event | Keys | Types |
 | --- | --- | --- |
@@ -487,14 +477,9 @@ Payload keys and their types. A missing key at run time is `nil`. The checker ty
 | `hurt` | `target`, `amount` | `name or ""`, `number()` |
 | `teleport` | `pad` | `name` |
 
-`shoot` uses `""` when the wall has no name. `hurt` uses `"player"` when the player takes damage.
+A missing key at run time is `nil`. A bind of that key is still given the payload type above. A literal pattern such as `(target: "panel")` has argument type `"panel"`.
 
-```
-(on shoot (target: "panel") …)   ; target is "panel"
-(on shoot (target:) …)           ; target is name or ""
-(on enter (zone: "ambush") …)    ; zone is "ambush"
-(on start () …)
-```
+`shoot` uses `""` when the wall has no name. `hurt` uses `"player"` when the player takes damage.
 
 ---
 
@@ -511,28 +496,29 @@ Used by `spawn`, `spawn-fill`, `set-attr`, and `get-attr`.
 | `label` | `pickup` | `stringy` |
 | `color` | `pickup` | `color` |
 | `shape` | `pickup` | `shape` |
-| `locked` | `door` | any (runtime uses truthiness; typically `bool()`) |
+| `locked` | `door` | any (run time uses truthiness) |
 | `open` | `door` (`set-attr` only) | any (truthiness) |
-| `disabled` | `button` | any (truthiness) |
+| `health` | `player` | `number()` |
+| `ammo` | `player` | `number()` |
+| `inventory` | `player` | `map` with rest `number()` |
+| `x`, `y`, `angle` | `player` | `number()` |
 
-If the id is exact and the map (or a `spawn` with that `id:`) knows the kind, a field that kind does not have is an error.
+If the id is exact text and the kind of that id is known (from the map or from `spawn` / `spawn-fill` with that `id:`), a field that kind does not have is an error.
 
-If the id is `unknown_string()`, any field in the table is allowed. A field that no kind has is still an error.
+If the id is `unknown_string()`, any field in this table is allowed. A field that no kind has is an error.
 
 ---
 
 ## Built-in functions
 
-None of these take `k:` arguments. Using `k:` is an error.
-
-Arguments are positional. `…` means zero or more. Optional slots say so.
+None of these take `k:` arguments. Using `k:` is an error. Arguments are positional. `…` means zero or more.
 
 ### Numbers
 
 | Call | Arguments | Result |
 | --- | --- | --- |
-| `(+ …)` | each `number()` | `number()` (no args: `0`) |
-| `(* …)` | each `number()` | `number()` (no args: `1`) |
+| `(+ …)` | each `number()` | `number()` (no arguments: `0`) |
+| `(* …)` | each `number()` | `number()` (no arguments: `1`) |
 | `(- x)` | `number()` | `number()` |
 | `(- x y …)` | `number()` each | `number()` |
 | `(/ x y …)` | `number()` each | `number()` |
@@ -543,7 +529,7 @@ Arguments are positional. `…` means zero or more. Optional slots say so.
 | `(floor x)` | `number()` | `number()` |
 | `(ceil x)` | `number()` | `number()` |
 
-A bind passed to these is tightened to `number()`.
+A bind passed to these is constrained toward `number()`.
 
 ### Compare
 
@@ -562,9 +548,7 @@ A bind passed to these is tightened to `number()`.
 
 | Call | Arguments | Result |
 | --- | --- | --- |
-| `(str …)` | any | If every arg is exact text, the concatenated exact text. Else `unknown_string()`. |
-
-`str` prints each value, then joins. Numbers, bools, lists, and maps are allowed.
+| `(str …)` | any | Concatenated exact text if every argument is exact text; otherwise `unknown_string()` |
 
 ### Length
 
@@ -620,21 +604,22 @@ A bind passed to these is tightened to `number()`.
 | `[T1 T2 …]` | `dynamic(T1 or T2 or … or nil)` |
 | anything else | `dynamic(any())` |
 
-`map` and `filter` walk a list as its items, or a map as `["key" value]` pairs. The checker does not yet type `f`’s argument or result. That is looser than the contract; a later pass should type `f`.
-
-`reduce` walks from the start. `f` takes `(acc item)`. The checker does not yet type `f`.
+`map` and `filter` walk a list as its items, or a map as `["key" value]` pairs. The checker does not yet type the argument or the result of `f`. `reduce` walks from the start; `f` takes `(acc item)`. The checker does not yet type `f`.
 
 ### Maps
 
 | Call | Arguments | Result |
 | --- | --- | --- |
-| `(get m k)` | `mapy`, key | See below |
-| `(set m k v)` | `mapy`, key, any | See below |
+| `(get m k)` | `mapy`, key or path | See below |
+| `(set m k v)` | `mapy`, key or path, any | See below |
+| `(update m k f)` | `mapy`, key or path, `fn` | a map |
 | `(merge …)` | each `mapy` | See below |
 | `(pairs m)` | `mapy` | `list(["string()" any()])` |
 | `(from-pairs xs)` | list | `dynamic` map |
 | `(keys m)` | `mapy` | `list(string() or unknown_string())` |
 | `(vals m)` | `mapy` | `list(any())` |
+
+`k` is a string or a list of strings. A list walks nested maps.
 
 `get`:
 
@@ -642,24 +627,28 @@ A bind passed to these is tightened to `number()`.
 | --- | --- |
 | `empty_map()` | `nil` |
 | `[a: Ta …]` and `k` is `"a"` | `Ta` |
-| `[a: Ta …]` and `k` is exact text not in the map | `nil` (or rest type or `nil`, if `*: rest` is present) |
+| `[a: Ta …]` and `k` is exact text not in the map | `nil`, or rest type or `nil` if `*: rest` is present |
 | `[a: Ta b: Tb]` and `k` is `unknown_string()` | `dynamic(Ta or Tb or nil)` |
+| `[a: [b: Tb]]` and `k` is `["a" "b"]` | `Tb` |
 
 `set`:
 
 | `m` and `k` | Result |
 | --- | --- |
 | `empty_map()` and `k` is `"a"` | `[a: type of v]` |
-| `[…]` and `k` is `"a"` | same map with `a` replaced by type of `v` |
+| `[…]` and `k` is `"a"` | the same map with `a` replaced by the type of `v` |
+| `v` is `nil` | the key is removed |
 | `k` is not exact text | `dynamic` map |
+
+`update` types `f` against the current value at that path, then behaves as `set` of `f`’s result.
 
 `merge` of known maps is a known map. Later keys win. `merge` of `empty_map()` with `m` is `m`. If a map is not known, the result is a `dynamic` map.
 
 ### Predicates
 
-Each takes one argument of any type. Result is `bool()`.
+Each takes one argument of any type. The result is `bool()`.
 
-| Call | True when |
+| Call | True at run time when |
 | --- | --- |
 | `(empty? x)` | `nil`, `[]`, `[:]`, or `""` |
 | `(list? x)` | a list |
@@ -669,9 +658,9 @@ Each takes one argument of any type. Result is `bool()`.
 | `(bool? x)` | `true` or `false` |
 | `(nil? x)` | `nil` |
 
-See `if` for how these tighten a bound name.
+See `if` for how these narrow a bound name.
 
-### Script store (`get-prop` / `set-prop`)
+### Script store
 
 This store is global for the script. It is not a map value.
 
@@ -680,7 +669,7 @@ This store is global for the script. It is not a map value.
 | `(set-prop k v)` | `stringy`, any | type of `v` |
 | `(get-prop k)` | `stringy` | See below |
 
-`set-prop` records the type of `v` under exact text `k` for the whole script (every handler, including `after`).
+`set-prop` records the type of `v` under exact text `k` for the whole script, including every handler and every `after` body. Order in the file does not matter.
 
 `get-prop`:
 
@@ -690,40 +679,35 @@ This store is global for the script. It is not a map value.
 | exact text written as `T1`, `T2`, … | `dynamic(T1 or T2 or … or nil)` |
 | not exact text | `dynamic(any())` |
 
-### Player
+### Player and messages
 
 | Call | Arguments | Result |
 | --- | --- | --- |
-| `(say …)` | any | `nil` (joins like `str`, then shows the line) |
-| `(has k)` | `stringy` | `bool()` |
-| `(give k)` | `stringy` | `bool()` |
-| `(give k n)` | `stringy`, `number()` | `bool()` |
-| `(take k)` | `stringy` | `bool()` |
-| `(take k n)` | `stringy`, `number()` | `bool()` |
+| `(say …)` | any | `nil` |
 | `(win)` | none | `nil` |
 | `(lose)` | none | `nil` |
 
-`"ammo"` and `"health"` are special for `give` / `take` / `has`. Any other string is inventory. The checker types all of them as `stringy`.
+The player is a thing with id `"player"`. Health, ammo, inventory, and pose are player fields. See `set-attr` / `get-attr` / `update-attr`.
 
 ### Things
 
 | Call | Arguments | Result |
 | --- | --- | --- |
 | `(set-attr id fields)` | `name` or `list(name)`, map of fields | `bool()` |
-| `(get-attr id)` | `name` | `dynamic` map of fields (checker is loose here) |
-| `(get-attr id attr)` | `name`, field name | `dynamic(any())` (checker is loose here) |
-| `(remove id)` | `name` or `list(name)` | `bool()` |
+| `(set-attr id key value)` | `name` or `list(name)`, key or path, any | `bool()` |
+| `(get-attr id)` | `name` | For `"player"`, the player row. For others, a `dynamic` map |
+| `(get-attr id key)` | `name`, key or path | For `"player"`, the field type. For others, `dynamic(any())` |
+| `(update-attr id key f)` | `name` or `list(name)`, key or path, `fn` | `bool()` |
+| `(remove id)` | `name` or `list(name)`, not `"player"` | `bool()` |
 | `(spawn place type)` | `place`, `thing` | `unknown_string()` |
 | `(spawn place type fields)` | `place`, `thing`, map | `id:` if that field is exact text, else `unknown_string()` |
-| `(spawn-fill place type)` | `place` (a zone), `thing` | `list(unknown_string())` |
+| `(spawn-fill place type)` | `place`, `thing` | `list(unknown_string())` |
 | `(spawn-fill place type fields)` | same, plus map | `list` of the same id type as `spawn` |
-| `(teleport who dest)` | `who`, `place` | `bool()` |
+| `(teleport who dest)` | `name`, `place` | `bool()` |
 
-`fields` for `spawn` / `spawn-fill` may have: `id`, `variant`, `dest`, `label`, `color`, `locked`, `disabled`, `shape`. Other keys are an error. Keys that do not belong to `type` are an error when `type` is exact text.
+`fields` for `spawn` / `spawn-fill` may have: `id`, `variant`, `dest`, `label`, `color`, `locked`, `disabled`, `shape`. `id: "player"` is an error. Other keys are an error. Keys that do not belong to `type` are an error when `type` is exact text.
 
-`fields` for `set-attr` may have: `locked`, `open`, `disabled`, `dest`, `label`, `color`, `variant`, `shape`. Other keys are an error.
-
-`get-attr` with one argument returns every field of that thing at run time. The checker currently returns `dynamic` map instead of a row per kind. `get-attr` with two arguments returns one field. The checker currently returns `dynamic(any())` instead of the field table. Both are looser than the contract.
+`set-attr` map keys may have the fields of that kind, including player fields when the id is `"player"`. `type` and `id` cannot be set.
 
 ### Walls
 
@@ -732,8 +716,9 @@ This store is global for the script. It is not a map value.
 | `(set-wall place fields)` | `place`, map | `bool()` |
 | `(get-wall place)` | `place` | `[type: wall, color: color, floor: color, ceiling: color]` |
 | `(get-wall place attr)` | `place`, `"type"` or `"color"` or `"floor"` or `"ceiling"` | `wall` for `"type"`, `color` otherwise |
+| `(update-wall place field f)` | `place`, those four names, `fn` | `bool()` |
 
-`fields` for `set-wall` may have: `type`, `color`, `floor`, `ceiling`. `type` must meet `wall`. Other keys are an error. At least one field is required at run time.
+`fields` for `set-wall` may have: `type`, `color`, `floor`, `ceiling`. `type` must fit `wall`. Other keys are an error. At least one field is required at run time.
 
 If `attr` is exact text that is not one of those four names, that is an error. If `attr` is `unknown_string()`, the result is `dynamic(any())`.
 
@@ -741,15 +726,13 @@ If `attr` is exact text that is not one of those four names, that is an error. I
 
 ## How a script is typed
 
-1. **Parse.** A parse error stops here. One mark on the bad text.
-2. **Names.** Collect `id()` from the map. Add `spawn` / `spawn-fill` `id:` values that are exact text, with that thing type.
-3. **Collect** top-level `def` and `on` clauses. Reject unknown events, bad parameter lists, `def` / `on` that are not at the top.
-4. **First walk.** Record every `set-prop` write. Type function bodies so bind parameters tighten. Build `fn` arrows. Do not report unknown names yet if a later `def` will bind them.
-5. **Second walk.** Type the script again with those writes and function types. Report errors.
+1. Parse. A parse error stops here. One mark on the bad text.
+2. Collect `id()` from the map. Scan the whole script and add exact `id:` values from `spawn` and `spawn-fill`, with that thing type. This step does not depend on source order.
+3. Collect top-level `def` and `on` clauses. Reject unknown events, bad parameter lists, and `def` / `on` that are not at the top.
+4. First walk: record every `set-prop` write; type function bodies so bind parameters are constrained; build `fn` arrows.
+5. Second walk: type the script again with those writes and function types. Report errors.
 
-Top-level forms that are not `def` or `on` are typed as a boot body. They run when the fight starts, before `on start`.
-
-A use is an error only when the argument type and the needed type share no values.
+Top-level forms that are not `def` or `on` are a boot body. They run when the fight starts, before `on start`.
 
 ---
 
@@ -757,4 +740,4 @@ A use is an error only when the argument type and the needed type share no value
 
 The checker waits about 1.5 seconds after the last edit. Overlapping marks join into one mark. The message is a tooltip on the mark. The line under the editor lists messages.
 
-Parse errors come first. Type errors use the same marks.
+Parse errors and type errors use the same marks.

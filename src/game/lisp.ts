@@ -1,6 +1,6 @@
 /** Tiny event Lisp: parse, format, highlight, evaluate. */
 
-import { parsePickupShape, texFromWallName } from "./types";
+import { parsePickupShape, PLAYER_ID, texFromWallName } from "./types";
 
 export type LispVal = (
   | { k: "num"; v: number }
@@ -96,17 +96,17 @@ export const BUILTINS = new Set([
   "nil?",
   "get",
   "set",
+  "update",
   "get-prop",
   "set-prop",
   "merge",
-  "has",
-  "give",
-  "take",
   "say",
   "set-attr",
   "get-attr",
+  "update-attr",
   "set-wall",
   "get-wall",
+  "update-wall",
   "spawn",
   "spawn-fill",
   "remove",
@@ -165,6 +165,97 @@ export function asNum(v: LispVal, ctx: string): number {
 export function asName(v: LispVal): string {
   if (v.k === "sym" || v.k === "str") return v.v;
   throw new LispError("expected a name");
+}
+
+function asPath(v: LispVal, ctx: string): string[] {
+  if (v.k === "list") {
+    if (!v.v.length) throw new LispError(`${ctx} needs a key`);
+    return v.v.map(asName);
+  }
+  return [asName(v)];
+}
+
+function mapGetPath(m: LispVal, path: string[], ctx: string): LispVal {
+  let cur = m;
+  for (const k of path) {
+    if (cur.k === "nil") return nil();
+    if (cur.k !== "map") throw new LispError(`${ctx} needs a map`);
+    cur = cur.v.get(k) ?? nil();
+  }
+  return cur;
+}
+
+function mapSetPath(m: LispVal, path: string[], val: LispVal, ctx: string): LispVal {
+  if (m.k !== "map") throw new LispError(`${ctx} needs a map`);
+  const go = (cur: LispVal, i: number): LispVal => {
+    if (i === path.length) return val;
+    let base: Map<string, LispVal>;
+    if (cur.k === "nil") base = new Map();
+    else if (cur.k === "map") base = new Map(cur.v);
+    else throw new LispError(`${ctx}: not a map`);
+    const k = path[i]!;
+    const next = go(base.get(k) ?? nil(), i + 1);
+    if (next.k === "nil" && i === path.length - 1) base.delete(k);
+    else base.set(k, next);
+    return { k: "map", v: base };
+  };
+  return go(m, 0);
+}
+
+function parseInventory(val: LispVal): Map<string, number> {
+  if (val.k !== "map") throw new LispError("inventory needs a map");
+  const inv = new Map<string, number>();
+  for (const [k, v] of val.v) {
+    if (v.k === "nil") continue;
+    if (v.k !== "num") throw new LispError("inventory values need to be numbers");
+    inv.set(k, v.v);
+  }
+  return inv;
+}
+
+function fieldToPatch(field: string, val: LispVal): AttrPatch {
+  switch (field) {
+    case "locked":
+      return { locked: truthy(val) };
+    case "open":
+      return { open: truthy(val) };
+    case "disabled":
+      return { disabled: truthy(val) };
+    case "dest":
+      return { dest: val.k === "nil" ? "" : asName(val) };
+    case "label":
+      return { label: val.k === "nil" ? "" : asName(val) };
+    case "color":
+      return { color: asColor(val, "color") };
+    case "variant":
+      return { variant: asName(val) };
+    case "shape": {
+      const parsed = parsePickupShape(asName(val));
+      if (!parsed) throw new LispError(`unknown shape: ${asName(val)}`);
+      return { shape: parsed };
+    }
+    case "health":
+      return { health: asNum(val, "health") };
+    case "ammo":
+      return { ammo: asNum(val, "ammo") };
+    case "x":
+      return { x: asNum(val, "x") };
+    case "y":
+      return { y: asNum(val, "y") };
+    case "angle":
+      return { angle: asNum(val, "angle") };
+    case "inventory":
+      return { inventory: parseInventory(val) };
+    case "type":
+    case "id":
+      throw new LispError(`cannot set ${field}`);
+    default:
+      throw new LispError(`unknown attr ${field}`);
+  }
+}
+
+function mergePatch(into: AttrPatch, extra: AttrPatch) {
+  Object.assign(into, extra);
 }
 
 function asIdList(v: LispVal): string[] {
@@ -905,6 +996,12 @@ export type AttrPatch = {
   color?: number;
   shape?: string;
   variant?: string;
+  health?: number;
+  ammo?: number;
+  inventory?: Map<string, number>;
+  x?: number;
+  y?: number;
+  angle?: number;
 };
 
 export type SetWallOpts = {
@@ -919,13 +1016,10 @@ export type SetWallOpts = {
 
 export type Host = {
   say: (msg: string) => void;
-  give: (what: string, n?: number) => boolean;
-  take: (what: string, n?: number) => boolean;
-  has: (what: string) => boolean;
   getVar: (key: string) => LispVal;
   setVar: (key: string, val: LispVal) => void;
   setAttr: (id: string, patch: AttrPatch) => boolean;
-  getAttr: (id: string, attr?: string) => LispVal | undefined;
+  getAttr: (id: string) => LispVal | undefined;
   setWall: (opts: SetWallOpts) => boolean;
   getWall: (
     loc: { at: string } | { x: number; y: number },
@@ -1502,6 +1596,9 @@ function parseThingAttrs(
   const disabled = attrs.get("disabled");
   const shape = attrs.get("shape");
   const id = attrs.get("id");
+  if (id && asName(id) === PLAYER_ID) {
+    throw new LispError(`id "${PLAYER_ID}" is reserved`);
+  }
   if (variant && kind !== "enemy") {
     throw new LispError("variant is only for enemy");
   }
@@ -1530,6 +1627,93 @@ function parseThingAttrs(
     disabled: disabled ? truthy(disabled) : undefined,
     shape: shape ? asName(shape) : undefined,
   };
+}
+
+function evalGetAttr(args: LispVal[], h: Host): LispVal {
+  if (!args.length) throw new LispError("get-attr needs an id");
+  const full = h.getAttr(asName(args[0]!)) ?? nil();
+  if (args.length === 1) return full;
+  if (full.k === "nil") return nil();
+  return mapGetPath(full, asPath(args[1]!, "get-attr"), "get-attr");
+}
+
+function evalSetAttr(args: LispVal[], h: Host): LispVal {
+  if (!args.length) throw new LispError("set-attr needs an id");
+  const ids = asIdList(args[0]!);
+  if (args.length === 2 && args[1]?.k === "map") {
+    const attrs = args[1].v;
+    const patch: AttrPatch = {};
+    if (!attrs.size) throw new LispError("set-attr needs a field");
+    for (const [k, val] of attrs) mergePatch(patch, fieldToPatch(k, val));
+    let ok = true;
+    for (const name of ids) {
+      if (!h.setAttr(name, patch)) ok = false;
+    }
+    return bool(ok);
+  }
+  if (args.length === 3) {
+    const path = asPath(args[1]!, "set-attr");
+    const val = args[2]!;
+    let ok = true;
+    for (const name of ids) {
+      if (!setAttrPath(h, name, path, val)) ok = false;
+    }
+    return bool(ok);
+  }
+  throw new LispError("set-attr needs a map of fields, or a key and a value");
+}
+
+function setAttrPath(h: Host, id: string, path: string[], val: LispVal): boolean {
+  if (path.length === 1) return h.setAttr(id, fieldToPatch(path[0]!, val));
+  const full = h.getAttr(id);
+  if (!full || full.k !== "map") return false;
+  const next = mapSetPath(full, path, val, "set-attr");
+  const top = path[0]!;
+  const topVal = next.k === "map" ? (next.v.get(top) ?? nil()) : nil();
+  return h.setAttr(id, fieldToPatch(top, topVal));
+}
+
+function evalUpdateAttr(args: LispVal[], h: Host, ctx: Ctx): LispVal {
+  if (args.length < 3) {
+    throw new LispError("update-attr needs an id, a key, and a function");
+  }
+  const path = asPath(args[1]!, "update-attr");
+  const f = args[2]!;
+  let ok = true;
+  for (const id of asIdList(args[0]!)) {
+    const full = h.getAttr(id) ?? nil();
+    const cur = full.k === "nil" ? nil() : mapGetPath(full, path, "update-attr");
+    const next = callPos(f, [cur], ctx);
+    if (!setAttrPath(h, id, path, next)) ok = false;
+  }
+  return bool(ok);
+}
+
+function evalUpdateWall(args: LispVal[], h: Host, ctx: Ctx): LispVal {
+  if (args.length < 3) {
+    throw new LispError("update-wall needs a place, a field, and a function");
+  }
+  const field = asName(args[1]!);
+  if (!["type", "color", "floor", "ceiling"].includes(field)) {
+    throw new LispError(`unknown attr ${field}`);
+  }
+  const f = args[2]!;
+  let ok = true;
+  for (const place of asPlaces(args[0]!, "update-wall")) {
+    const cur = h.getWall(place, field) ?? nil();
+    const next = callPos(f, [cur], ctx);
+    const opts: SetWallOpts = { ...place };
+    if (field === "type") {
+      if (texFromWallName(asName(next)) === null) {
+        throw new LispError(`unknown type: ${asName(next)}`);
+      }
+      opts.type = asName(next);
+    } else if (field === "color") opts.color = asColor(next, "color");
+    else if (field === "floor") opts.floor = asColor(next, "floor");
+    else opts.ceiling = asColor(next, "ceiling");
+    if (!h.setWall(opts)) ok = false;
+  }
+  return bool(ok);
 }
 
 function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
@@ -1681,15 +1865,22 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       if (args.length < 2) throw new LispError("get needs a map and a key");
       const m = args[0]!;
       if (m.k !== "map") throw new LispError("get needs a map");
-      return m.v.get(asName(args[1]!)) ?? nil();
+      return mapGetPath(m, asPath(args[1]!, "get"), "get");
     }
     case "set": {
       if (args.length < 3) throw new LispError("set needs a map, a key, and a value");
       const m = args[0]!;
       if (m.k !== "map") throw new LispError("set needs a map");
-      const out = new Map(m.v);
-      out.set(asName(args[1]!), args[2]!);
-      return { k: "map", v: out };
+      return mapSetPath(m, asPath(args[1]!, "set"), args[2]!, "set");
+    }
+    case "update": {
+      if (args.length < 3) throw new LispError("update needs a map, a key, and a function");
+      const m = args[0]!;
+      if (m.k !== "map") throw new LispError("update needs a map");
+      const path = asPath(args[1]!, "update");
+      const cur = mapGetPath(m, path, "update");
+      const next = callPos(args[2]!, [cur], ctx);
+      return mapSetPath(m, path, next, "update");
     }
     case "get-prop":
       return h.getVar(asName(args[0] ?? nil()));
@@ -1706,90 +1897,15 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       }
       return { k: "map", v: out };
     }
-    case "has":
-      return bool(h.has(asName(args[0] ?? nil())));
-    case "give":
-      return bool(
-        h.give(
-          asName(args[0] ?? nil()),
-          args[1]?.k === "num" ? args[1].v : undefined,
-        ),
-      );
-    case "take":
-      return bool(
-        h.take(
-          asName(args[0] ?? nil()),
-          args[1]?.k === "num" ? args[1].v : undefined,
-        ),
-      );
     case "say":
       h.say(args.map(printVal).join(""));
       return nil();
-    case "set-attr": {
-      if (args.length < 1) throw new LispError("set-attr needs an id");
-      const attrs = requireMap(args, 1, "set-attr");
-      unknownKeys(
-        attrs,
-        ["locked", "open", "disabled", "dest", "label", "color", "variant", "shape"],
-        "set-attr",
-      );
-      const patch: AttrPatch = {};
-      if (attrs.has("locked")) patch.locked = truthy(attrs.get("locked")!);
-      if (attrs.has("open")) patch.open = truthy(attrs.get("open")!);
-      if (attrs.has("disabled")) patch.disabled = truthy(attrs.get("disabled")!);
-      const dest = attrs.get("dest");
-      if (dest) patch.dest = asName(dest);
-      const label = attrs.get("label");
-      if (label) patch.label = asName(label);
-      const color = attrs.get("color");
-      if (color) patch.color = asColor(color, "color");
-      const variant = attrs.get("variant");
-      if (variant) patch.variant = asName(variant);
-      const shape = attrs.get("shape");
-      if (shape) {
-        const parsed = parsePickupShape(asName(shape));
-        if (!parsed) throw new LispError(`unknown shape: ${asName(shape)}`);
-        patch.shape = parsed;
-      }
-      if (
-        patch.locked === undefined &&
-        patch.open === undefined &&
-        patch.disabled === undefined &&
-        !dest &&
-        !label &&
-        !color &&
-        !variant &&
-        !shape
-      ) {
-        throw new LispError("set-attr needs a field");
-      }
-      let ok = true;
-      for (const name of asIdList(args[0]!)) {
-        if (!h.setAttr(name, patch)) ok = false;
-      }
-      return bool(ok);
-    }
-    case "get-attr": {
-      if (args.length === 1) {
-        return h.getAttr(asName(args[0]!)) ?? nil();
-      }
-      if (args.length < 2) throw new LispError("get-attr needs an id");
-      const attr = asName(args[1]!);
-      const ok = [
-        "locked",
-        "open",
-        "disabled",
-        "dest",
-        "label",
-        "color",
-        "variant",
-        "type",
-        "id",
-        "shape",
-      ];
-      if (!ok.includes(attr)) throw new LispError(`unknown attr ${attr}`);
-      return h.getAttr(asName(args[0]!), attr) ?? nil();
-    }
+    case "set-attr":
+      return evalSetAttr(args, h);
+    case "get-attr":
+      return evalGetAttr(args, h);
+    case "update-attr":
+      return evalUpdateAttr(args, h, ctx);
     case "set-wall": {
       if (args.length < 1) throw new LispError("set-wall needs a place");
       const attrs = requireMap(args, 1, "set-wall");
@@ -1833,6 +1949,8 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
       }
       return h.getWall(asPlace(args[0]!, "get-wall"), attr) ?? nil();
     }
+    case "update-wall":
+      return evalUpdateWall(args, h, ctx);
     case "spawn": {
       if (args.length < 2) throw new LispError("spawn needs a place and a type");
       const kind = asName(args[1]!);
@@ -1862,6 +1980,7 @@ function callBuiltin(name: string, call: CallParts, ctx: Ctx): LispVal {
     case "remove": {
       let ok = true;
       for (const name of asIdList(args[0] ?? nil())) {
+        if (name === PLAYER_ID) throw new LispError(`cannot remove "${PLAYER_ID}"`);
         if (!h.remove(name)) ok = false;
       }
       return bool(ok);

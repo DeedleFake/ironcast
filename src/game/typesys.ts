@@ -15,6 +15,7 @@ import {
   type EntityType,
   type GameLevel,
   PICKUP_SHAPES,
+  PLAYER_ID,
   WALL_IDS,
 } from "./types";
 
@@ -67,9 +68,15 @@ const ALL_ATTRS = [
   "shape",
   "type",
   "id",
+  "health",
+  "ammo",
+  "inventory",
+  "x",
+  "y",
+  "angle",
 ] as const;
 
-const ATTR_KINDS: Record<string, EntityType[] | "*"> = {
+const ATTR_KINDS: Record<string, string[] | "*"> = {
   type: "*",
   id: "*",
   locked: ["door"],
@@ -80,6 +87,12 @@ const ATTR_KINDS: Record<string, EntityType[] | "*"> = {
   color: ["pickup"],
   shape: ["pickup"],
   variant: ["enemy"],
+  health: ["player"],
+  ammo: ["player"],
+  inventory: ["player"],
+  x: ["player"],
+  y: ["player"],
+  angle: ["player"],
 };
 
 export type TypeWorld = {
@@ -98,6 +111,8 @@ export function worldFromLevel(level: GameLevel): TypeWorld {
   }
   for (const z of level.zones ?? []) if (z.id) ids.add(z.id);
   for (const m of level.marks ?? []) if (m.id) ids.add(m.id);
+  ids.add(PLAYER_ID);
+  kinds.set(PLAYER_ID, "player");
   return { ids, kinds };
 }
 
@@ -119,7 +134,7 @@ function tLit(s: string): Type {
 
 function tDyn(t: Type): Type {
   if (t.k === "dyn") return t;
-  if (t.k === "any" || t.k === "none") return t;
+  if (t.k === "none") return t;
   return { k: "dyn", t };
 }
 
@@ -287,6 +302,102 @@ function overlaps(got: Type, expected: Type): boolean {
   return !isNone(intersect(unwrap(got), unwrap(expected)));
 }
 
+/** True when every value of `a` is a value of `b`. */
+function isSubtype(a: Type, b: Type): boolean {
+  a = unwrap(a);
+  b = unwrap(b);
+  if (a.k === "none" || b.k === "any") return true;
+  if (a.k === "any") return false;
+  if (a.k === "or") return a.ts.every((t) => isSubtype(t, b));
+  if (b.k === "or") return b.ts.some((t) => isSubtype(a, t));
+  const hit = unwrap(intersect(a, b));
+  if (isNone(hit)) return false;
+  return same(hit, a);
+}
+
+function argFits(got: Type, domain: Type): boolean {
+  if (got.k === "dyn") return overlaps(got, domain);
+  return isSubtype(got, domain);
+}
+
+function pathWant(): Type {
+  const key = tOr([tStr, tUStr]);
+  return tOr([key, tEmptyList, tList(key), { k: "tuple", items: [key] }]);
+}
+
+function pathKeys(t: Type): string[] | "unknown" | null {
+  t = unwrap(t);
+  if (t.k === "str" && t.v !== undefined) return [t.v];
+  if (t.k === "ustr" || t.k === "str") return "unknown";
+  if (t.k === "tuple") {
+    const keys: string[] = [];
+    for (const item of t.items) {
+      const u = unwrap(item);
+      if (u.k === "str" && u.v !== undefined) keys.push(u.v);
+      else return "unknown";
+    }
+    return keys.length ? keys : null;
+  }
+  if (t.k === "list") return "unknown";
+  if (t.k === "empty_list") return null;
+  return null;
+}
+
+function typeMapGet(m: Type, keys: string[]): Type {
+  let cur = unwrap(m);
+  for (const k of keys) {
+    if (cur.k === "empty_map") return tNil;
+    if (cur.k === "map") {
+      if (cur.keys.has(k)) cur = unwrap(cur.keys.get(k)!);
+      else if (cur.rest) cur = unwrap(cur.rest);
+      else return tNil;
+      continue;
+    }
+    if (cur.k === "any") return tDyn(tAny);
+    return tDyn(tAny);
+  }
+  return cur;
+}
+
+function typeMapSet(m: Type, keys: string[], val: Type): Type {
+  const setAt = (cur: Type, i: number): Type => {
+    if (i === keys.length) return val;
+    const k = keys[i]!;
+    const inner = unwrap(cur);
+    let keysMap = new Map<string, Type>();
+    let rest: Type | undefined;
+    if (inner.k === "map") {
+      keysMap = new Map(inner.keys);
+      rest = inner.rest;
+    } else if (inner.k !== "empty_map" && inner.k !== "nil") {
+      return tDyn(tMap(new Map(), tAny));
+    }
+    const child = keysMap.get(k) ?? rest ?? tEmptyMap;
+    const next = setAt(isNone(child) || unwrap(child).k === "nil" ? tEmptyMap : child, i + 1);
+    const leafNil = i === keys.length - 1 && unwrap(val).k === "nil" && val.k !== "dyn";
+    if (leafNil) keysMap.delete(k);
+    else keysMap.set(k, next);
+    if (!keysMap.size && !rest) return tEmptyMap;
+    return tMap(keysMap, rest);
+  };
+  return setAt(m, 0);
+}
+
+function playerMapType(): Type {
+  return tMap(
+    new Map([
+      ["id", tLit(PLAYER_ID)],
+      ["type", tLit(PLAYER_ID)],
+      ["health", tNum],
+      ["ammo", tNum],
+      ["inventory", tMap(new Map(), tNum)],
+      ["x", tNum],
+      ["y", tNum],
+      ["angle", tNum],
+    ]),
+  );
+}
+
 function withoutFalsy(t: Type): Type {
   t = unwrap(t);
   if (t.k === "nil" || (t.k === "bool" && t.v === false)) return tNone;
@@ -379,12 +490,13 @@ class Checker {
   }
 
   expect(got: Type, want: Type, at: LispVal | undefined, ctx: string): Type {
-    const hit = intersect(unwrap(got), unwrap(want));
-    if (isNone(hit)) {
+    const ok = got.k === "dyn" ? overlaps(got, want) : isSubtype(got, want);
+    if (!ok) {
       this.err(at, `${ctx}: got ${printType(got)}, need ${printType(want)}`);
       return tDyn(want);
     }
-    return got.k === "dyn" ? tDyn(hit) : hit;
+    const hit = intersect(unwrap(got), unwrap(want));
+    return got.k === "dyn" ? tDyn(hit) : got;
   }
 
   lookup(env: Env, name: string): Type | undefined {
@@ -558,10 +670,13 @@ class Checker {
     }
     const mt = this.typeForm(args[0], env);
     const inner = unwrap(mt);
-    if (inner.k !== "map" && inner.k !== "empty_map" && inner.k !== "any") {
-      if (!overlaps(mt, tMap(new Map(), tAny))) {
+    const mapWant = tOr([tEmptyMap, tMap(new Map(), tAny)]);
+    if (mt.k === "dyn") {
+      if (!overlaps(mt, mapWant)) {
         this.err(args[0], `let needs a map, got ${printType(mt)}`);
       }
+    } else if (inner.k !== "map" && inner.k !== "empty_map") {
+      this.err(args[0], `let needs a map, got ${printType(mt)}`);
     }
     const child = new Map(env);
     if (inner.k === "map") {
@@ -618,12 +733,12 @@ class Checker {
   bindParams(params: Params, env: Env) {
     if (params.k === "pos") {
       for (const p of params.pats) {
-        if (p.k === "bind") env.set(p.name, tAny);
+        if (p.k === "bind") env.set(p.name, tDyn(tAny));
       }
       return;
     }
     for (const { name, pat } of params.pats) {
-      if (pat.k === "bind") env.set(pat.name, tAny);
+      if (pat.k === "bind") env.set(pat.name, tDyn(tAny));
       else env.set(name, kindOf(pat.value));
     }
   }
@@ -656,12 +771,24 @@ class Checker {
     const keys = new Map<string, Type>();
     for (const k of parts.keys) keys.set(k.name, this.typeForm(k.raw, env));
     const inner = unwrap(fnT);
-    if (inner.k === "any" || inner.k === "dyn") return tDyn(tAny);
+    if (fnT.k === "dyn") return tDyn(tAny);
+    if (inner.k === "any") return tDyn(tAny);
     if (inner.k !== "fn") {
       this.err(form, `not a function: ${printType(fnT)}`);
       return tDyn(tAny);
     }
     return this.applyArrows(inner.arrows, pos, keys, form);
+  }
+
+  applyFnType(fnT: Type, pos: Type[], form: LispVal): Type {
+    if (fnT.k === "dyn") return tDyn(tAny);
+    const inner = unwrap(fnT);
+    if (inner.k === "any") return tDyn(tAny);
+    if (inner.k !== "fn") {
+      this.err(form, `not a function: ${printType(fnT)}`);
+      return tDyn(tAny);
+    }
+    return this.applyArrows(inner.arrows, pos, new Map(), form);
   }
 
   applyArrows(
@@ -675,14 +802,14 @@ class Checker {
       if (ar.k === "pos") {
         if (keys.size) continue;
         if (ar.args.length !== pos.length) continue;
-        if (ar.args.every((t, i) => overlaps(pos[i]!, t))) rets.push(ar.ret);
+        if (ar.args.every((t, i) => argFits(pos[i]!, t))) rets.push(ar.ret);
         continue;
       }
       if (pos.length) continue;
       let ok = true;
       for (const [name, t] of ar.args) {
         const got = keys.get(name) ?? tNil;
-        if (!overlaps(got, tOr([t, tNil]))) ok = false;
+        if (!argFits(got, tOr([t, tNil]))) ok = false;
       }
       if (ok) rets.push(ar.ret);
     }
@@ -853,18 +980,21 @@ class Checker {
           this.err(form, "get needs a map and a key");
           return tDyn(tAny);
         }
-        const m = unwrap(pos[0]!);
-        const key = unwrap(pos[1]!);
-        if (m.k === "empty_map") return tNil;
-        if (m.k === "map" && key.k === "str" && key.v !== undefined) {
-          return m.keys.get(key.v) ?? (m.rest ? tOr([m.rest, tNil]) : tNil);
-        }
-        if (m.k === "map") {
-          const vals = [...m.keys.values()];
-          if (m.rest) vals.push(m.rest);
-          return tDyn(tOr([...vals, tNil]));
-        }
         this.expect(pos[0]!, tOr([tEmptyMap, tMap(new Map(), tAny)]), raw?.[0] ?? form, "get");
+        this.expect(pos[1]!, pathWant(), raw?.[1] ?? form, "get");
+        const m = unwrap(pos[0]!);
+        const keys = pathKeys(pos[1]!);
+        if (keys === null) return tNil;
+        if (keys === "unknown") {
+          if (m.k === "map") {
+            const vals = [...m.keys.values()];
+            if (m.rest) vals.push(m.rest);
+            return tDyn(tOr([...vals, tNil]));
+          }
+          return tDyn(tAny);
+        }
+        if (m.k === "empty_map") return tNil;
+        if (m.k === "map") return typeMapGet(m, keys);
         return tDyn(tAny);
       }
       case "set": {
@@ -873,18 +1003,31 @@ class Checker {
           return tDyn(tAny);
         }
         this.expect(pos[0]!, tOr([tEmptyMap, tMap(new Map(), tAny)]), raw?.[0] ?? form, "set");
-        const m = unwrap(pos[0]!);
-        const key = unwrap(pos[1]!);
+        this.expect(pos[1]!, pathWant(), raw?.[1] ?? form, "set");
+        const keys = pathKeys(pos[1]!);
         const val = pos[2]!;
-        if (m.k === "map" && key.k === "str" && key.v !== undefined) {
-          const keys = new Map(m.keys);
-          keys.set(key.v, val);
-          return tMap(keys, m.rest);
+        if (keys === null) return pos[0]!;
+        if (keys === "unknown") return tDyn(tMap(new Map(), tAny));
+        return typeMapSet(pos[0]!, keys, val);
+      }
+      case "update": {
+        if (pos.length < 3) {
+          this.err(form, "update needs a map, a key, and a function");
+          return tDyn(tAny);
         }
-        if (m.k === "empty_map" && key.k === "str" && key.v !== undefined) {
-          return tMap(new Map([[key.v, val]]));
-        }
-        return tDyn(tMap(new Map(), tAny));
+        this.expect(pos[0]!, tOr([tEmptyMap, tMap(new Map(), tAny)]), raw?.[0] ?? form, "update");
+        this.expect(pos[1]!, pathWant(), raw?.[1] ?? form, "update");
+        const keys = pathKeys(pos[1]!);
+        const cur =
+          keys === null
+            ? tNil
+            : keys === "unknown"
+              ? tDyn(tAny)
+              : typeMapGet(unwrap(pos[0]!), keys);
+        const ret = this.applyFnType(pos[2]!, [cur], form);
+        if (keys === null) return pos[0]!;
+        if (keys === "unknown") return tDyn(tMap(new Map(), tAny));
+        return typeMapSet(pos[0]!, keys, ret);
       }
       case "get-prop": {
         const key = unwrap(pos[0] ?? tNil);
@@ -921,36 +1064,32 @@ class Checker {
         }
         return acc;
       }
-      case "has":
-      case "give":
-      case "take":
-        namesh(0);
-        if (name !== "has" && pos[1]) this.expect(pos[1], tNum, raw?.[1] ?? form, name);
-        return tBool;
       case "say":
         return tNil;
       case "set-attr":
         return this.typeSetAttr(pos, form, raw);
       case "get-attr":
         return this.typeGetAttr(pos, form, raw);
+      case "update-attr":
+        return this.typeUpdateAttr(pos, form, raw);
       case "set-wall":
         return this.typeSetWall(pos, form, raw);
       case "get-wall":
         return this.typeGetWall(pos, form, raw);
+      case "update-wall":
+        return this.typeUpdateWall(pos, form, raw);
       case "spawn":
         return this.typeSpawn(pos, form, raw, false);
       case "spawn-fill":
         return this.typeSpawn(pos, form, raw, true);
-      case "remove":
-        this.expect(pos[0] ?? tNil, tOr([nameType(this.world), tList(nameType(this.world))]), raw?.[0] ?? form, name);
+      case "remove": {
+        const ids = [...this.world.ids].filter((id) => id !== PLAYER_ID);
+        const one = ids.length ? tOr([...ids.map(tLit), tUStr]) : tUStr;
+        this.expect(pos[0] ?? tNil, tOr([one, tList(one)]), raw?.[0] ?? form, name);
         return tBool;
+      }
       case "teleport":
-        this.expect(
-          pos[0] ?? tNil,
-          tOr([nameType(this.world), tLit("player")]),
-          raw?.[0] ?? form,
-          name,
-        );
+        this.expect(pos[0] ?? tNil, nameType(this.world), raw?.[0] ?? form, name);
         this.expect(pos[1] ?? tNil, placeType(this.world), raw?.[1] ?? form, name);
         return tBool;
       case "win":
@@ -980,14 +1119,31 @@ class Checker {
       this.err(form, "set-attr needs an id");
       return tBool;
     }
-    this.expect(pos[0]!, tOr([nameType(this.world), tList(nameType(this.world))]), raw?.[0] ?? form, "set-attr");
-    const fields = pos[1] ? unwrap(pos[1]) : tNone;
-    if (fields.k !== "map" && fields.k !== "empty_map") {
-      if (pos[1]) this.err(raw?.[1] ?? form, "set-attr needs a map of fields");
-      else this.err(form, "set-attr needs a map of fields");
+    this.expect(
+      pos[0]!,
+      tOr([nameType(this.world), tList(nameType(this.world))]),
+      raw?.[0] ?? form,
+      "set-attr",
+    );
+    if (pos.length === 2) {
+      const fields = unwrap(pos[1]!);
+      if (fields.k !== "map" && fields.k !== "empty_map") {
+        this.err(raw?.[1] ?? form, "set-attr needs a map of fields");
+        return tBool;
+      }
+      if (fields.k === "map") this.checkAttrKeys(fields, pos[0]!, raw?.[1] ?? form);
       return tBool;
     }
-    if (fields.k === "map") this.checkAttrKeys(fields, pos[0]!, raw?.[1] ?? form);
+    if (pos.length === 3) {
+      this.expect(pos[1]!, pathWant(), raw?.[1] ?? form, "set-attr");
+      const keys = pathKeys(pos[1]!);
+      if (keys && keys !== "unknown" && keys.length >= 1) {
+        const dummy = tMap(new Map([[keys[0]!, pos[2]!]]));
+        if (dummy.k === "map") this.checkAttrKeys(dummy, pos[0]!, raw?.[1] ?? form);
+      }
+      return tBool;
+    }
+    this.err(form, "set-attr needs a map of fields, or a key and a value");
     return tBool;
   }
 
@@ -997,23 +1153,66 @@ class Checker {
       return tDyn(tAny);
     }
     this.expect(pos[0]!, nameType(this.world), raw?.[0] ?? form, "get-attr");
-    if (pos.length === 1) return tDyn(tMap(new Map(), tAny));
-    const attr = unwrap(pos[1]!);
-    if (attr.k === "str" && attr.v !== undefined) {
-      if (!ALL_ATTRS.includes(attr.v as (typeof ALL_ATTRS)[number])) {
-        this.err(raw?.[1] ?? form, `unknown attr ${attr.v}`);
+    const id = unwrap(pos[0]!);
+    const full = id.k === "str" && id.v === PLAYER_ID ? playerMapType() : tDyn(tMap(new Map(), tAny));
+    if (pos.length === 1) return full;
+    this.expect(pos[1]!, pathWant(), raw?.[1] ?? form, "get-attr");
+    const keys = pathKeys(pos[1]!);
+    if (keys === null) return tNil;
+    if (keys === "unknown") return tDyn(tAny);
+    if (id.k === "str" && id.v === PLAYER_ID) return typeMapGet(playerMapType(), keys);
+    if (keys.length === 1) {
+      const attr = keys[0]!;
+      if (!ALL_ATTRS.includes(attr as (typeof ALL_ATTRS)[number])) {
+        this.err(raw?.[1] ?? form, `unknown attr ${attr}`);
       }
-      const id = unwrap(pos[0]!);
       if (id.k === "str" && id.v !== undefined) {
         const kind = this.world.kinds.get(id.v);
-        if (kind && !attrAllowed(attr.v, kind)) {
-          this.err(raw?.[1] ?? form, `${attr.v} is not a field of ${kind}`);
+        if (kind && !attrAllowed(attr, kind)) {
+          this.err(raw?.[1] ?? form, `${attr} is not a field of ${kind}`);
         }
       }
-      return tDyn(tAny);
     }
-    this.expect(pos[1]!, tOr([tStr, tUStr]), raw?.[1] ?? form, "get-attr");
     return tDyn(tAny);
+  }
+
+  typeUpdateAttr(pos: Type[], form: LispVal, raw?: LispVal[]): Type {
+    if (pos.length < 3) {
+      this.err(form, "update-attr needs an id, a key, and a function");
+      return tBool;
+    }
+    this.expect(
+      pos[0]!,
+      tOr([nameType(this.world), tList(nameType(this.world))]),
+      raw?.[0] ?? form,
+      "update-attr",
+    );
+    this.expect(pos[1]!, pathWant(), raw?.[1] ?? form, "update-attr");
+    const idT = unwrap(pos[0]!);
+    const cur =
+      idT.k === "list"
+        ? tDyn(tAny)
+        : this.typeGetAttr([pos[0]!, pos[1]!], form, raw);
+    this.applyFnType(pos[2]!, [cur], form);
+    return tBool;
+  }
+
+  typeUpdateWall(pos: Type[], form: LispVal, raw?: LispVal[]): Type {
+    if (pos.length < 3) {
+      this.err(form, "update-wall needs a place, a field, and a function");
+      return tBool;
+    }
+    this.expect(pos[0]!, placeType(this.world), raw?.[0] ?? form, "update-wall");
+    this.expect(pos[1]!, tOr([tLit("type"), tLit("color"), tLit("floor"), tLit("ceiling"), tUStr]), raw?.[1] ?? form, "update-wall");
+    const field = unwrap(pos[1]!);
+    const cur =
+      field.k === "str" && field.v === "type"
+        ? tOr([WALL_TYPE, tUStr])
+        : field.k === "str" && ["color", "floor", "ceiling"].includes(field.v ?? "")
+          ? COLOR_TYPE
+          : tDyn(tAny);
+    this.applyFnType(pos[2]!, [cur], form);
+    return tBool;
   }
 
   checkAttrKeys(fields: Extract<Type, { k: "map" }>, idT: Type, at: LispVal) {
@@ -1098,8 +1297,10 @@ class Checker {
       const id = fields.keys.get("id");
       if (id) {
         const u = unwrap(id);
-        if (u.k === "str" && u.v !== undefined) idT = tLit(u.v);
-        else idT = tUStr;
+        if (u.k === "str" && u.v !== undefined) {
+          if (u.v === PLAYER_ID) this.err(raw?.[2] ?? form, `id "${PLAYER_ID}" is reserved`);
+          else idT = tLit(u.v);
+        } else idT = tUStr;
       }
       const shape = fields.keys.get("shape");
       if (shape) this.expect(shape, tOr([SHAPE_TYPE, tUStr]), raw?.[2] ?? form, "shape");
@@ -1114,7 +1315,7 @@ function attrAllowed(attr: string, kind: string): boolean {
   const ks = ATTR_KINDS[attr];
   if (!ks) return false;
   if (ks === "*") return true;
-  return ks.includes(kind as EntityType);
+  return ks.includes(kind);
 }
 
 function spawnFieldOk(key: string, kind: string): boolean {
@@ -1155,6 +1356,7 @@ function collectSpawnIds(forms: LispVal[], world: TypeWorld) {
     if (fields?.k === "map") {
       const id = fields.v.get("id");
       if (id?.k === "str") {
+        if (id.v === PLAYER_ID) return;
         world.ids.add(id.v);
         if (kind) world.kinds.set(id.v, kind);
       }

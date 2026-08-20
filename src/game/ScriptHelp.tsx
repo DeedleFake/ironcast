@@ -34,7 +34,7 @@ const SAMPLE_SRC = `; Use the same names as the editor. announce is a small help
 
 (on shoot (target: "panel")
   (set-wall "panel" [type: "empty"])
-  (give "ammo" 20))
+  (update-attr "player" "ammo" (fn (n) (+ n 20))))
 `;
 
 const SAMPLE = (() => {
@@ -427,7 +427,7 @@ function Keywords() {
           {`(if (get-attr "door-armory" "locked")
   (say "Locked.")
   (say "Find the key.")
-else if (has "key-red")
+else if (get-attr "player" ["inventory" "key-red"])
   (set-attr "door-armory" [open: true])
 else
   (say "Still locked."))`}
@@ -666,9 +666,12 @@ function Builtins() {
           </li>
           <li>
             <Code>(get m key)</Code> reads a key from a map. A missing
-            key is <Code>nil</Code>.{" "}
+            key is <Code>nil</Code>. <Code>key</Code> can be a string or
+            a list of strings.{" "}
             <Code>(set m key value)</Code> returns a new map with that
-            key set.
+            key set. A value of <Code>nil</Code> removes the key.{" "}
+            <Code>(update m key f)</Code> writes the result of{" "}
+            <Code>f</Code> at that key.
           </li>
           <li>
             <Code>(cons a xs)</Code> puts <Code>a</Code> at the front of list{" "}
@@ -833,26 +836,11 @@ function Commands() {
   return (
     <div className="space-y-4">
       <Block>
-        <H>Messages and inventory</H>
+        <H>Messages</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>(say a b ...)</Code> shows a message. The arguments join
             into one line.
-          </li>
-          <li>
-            <Code>(give "ammo" n)</Code> adds ammo.{" "}
-            <Code>(give "health" n)</Code> adds health. Any other
-            string goes into the inventory.
-          </li>
-          <li>
-            <Code>(take "ammo" n)</Code> removes ammo.{" "}
-            <Code>(take "health" n)</Code> removes health. Any other
-            string leaves the inventory.
-          </li>
-          <li>
-            <Code>(has "ammo")</Code> is true when ammo is more than
-            zero. <Code>(has "key-red")</Code> is true when that
-            string is in the inventory.
           </li>
         </ul>
       </Block>
@@ -864,35 +852,61 @@ function Commands() {
           value. A missing value is <Code>nil</Code>.
         </p>
         <p>
-          <Code>(get attrs "locked")</Code> reads a key from a map. A
-          missing key is <Code>nil</Code>.{" "}
-          <Code>(set attrs "locked" true)</Code> returns a new map. The
-          old map does not change.
+          <Code>(get m key)</Code> reads a key from a map.{" "}
+          <Code>key</Code> is a string or a list of strings, such as{" "}
+          <Code>["inventory" "key-card"]</Code>. A missing key is{" "}
+          <Code>nil</Code>. <Code>(set m key value)</Code> returns a new
+          map. The old map does not change. A value of <Code>nil</Code>{" "}
+          removes that key. Missing maps in the middle of a path are
+          created.
+        </p>
+        <p>
+          <Code>(update m key f)</Code> reads the key, calls{" "}
+          <Code>f</Code> with that value, and returns a new map with the
+          result. If <Code>f</Code> returns <Code>nil</Code>, the key is
+          removed.
         </p>
       </Block>
       <Block>
-        <H>set-attr, get-attr</H>
+        <H>set-attr, get-attr, update-attr</H>
         <p>
           <Code>set-attr</Code> changes a named thing.{" "}
-          <Code>get-attr</Code> reads a named thing.
+          <Code>get-attr</Code> reads a named thing.{" "}
+          <Code>update-attr</Code> reads a field, calls a function, and
+          writes the result.
         </p>
         <p>
-          <Code>(set-attr id fields)</Code> takes a name or a list of
-          names, then a map of fields to change. The form returns true when
-          every named thing exists. The Things tab lists the fields.
+          The first argument is a name or a list of names. Then either a
+          map of fields, or a key and a value. A key is a string or a list
+          of strings.
         </p>
         <p>
           <Code>(set-attr "door-armory" [locked: true])</Code> locks
           that door.{" "}
           <Code>(set-attr ["door-a" "door-b"] [open: true])</Code>{" "}
-          changes every name in the list.
+          changes every name in the list.{" "}
+          <Code>(set-attr "player" "ammo" 40)</Code> sets one field.{" "}
+          <Code>(set-attr "player" ["inventory" "key-card"] 1)</Code>{" "}
+          writes a nested key.
         </p>
         <p>
           <Code>(get-attr "door-armory")</Code> returns a map of the
           fields that thing has.{" "}
           <Code>(get-attr "door-armory" "locked")</Code> reads one
           field. If the thing is missing, the result is <Code>nil</Code>.
-          You can also read <Code>"type"</Code> and <Code>"id"</Code>.
+        </p>
+        <p>
+          <Code>(update-attr "player" "ammo" (fn (n) (+ n 20)))</Code>{" "}
+          adds ammo.{" "}
+          <Code>(update-attr "player" ["inventory" "key-card"] (fn (n) (or n 1)))</Code>{" "}
+          puts a card in the bag if it was missing.
+        </p>
+        <p>
+          The player id is always <Code>"player"</Code>. Nothing else
+          may use that name. Player fields are <Code>health</Code>,{" "}
+          <Code>ammo</Code>, <Code>inventory</Code>, <Code>x</Code>,{" "}
+          <Code>y</Code>, and <Code>angle</Code>. Inventory is a map from
+          item name to a number. A missing item is <Code>nil</Code>.
         </p>
         <p>
           A button is a use point. The player cannot see it. You can put a
@@ -901,7 +915,7 @@ function Commands() {
         </p>
         <p>
           To change a wall, the floor, or the ceiling, use{" "}
-          <Code>set-wall</Code>.
+          <Code>set-wall</Code> or <Code>update-wall</Code>.
         </p>
       </Block>
       <Block>
@@ -972,12 +986,22 @@ function Commands() {
         </p>
       </Block>
       <Block>
+        <H>update-wall</H>
+        <p>
+          <Code>(update-wall place field f)</Code> reads one wall field,
+          calls <Code>f</Code> with that value, and writes the result.{" "}
+          <Code>field</Code> is <Code>"type"</Code>, <Code>"color"</Code>
+          , <Code>"floor"</Code>, or <Code>"ceiling"</Code>.
+        </p>
+      </Block>
+      <Block>
         <H>remove, teleport, win, lose</H>
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>(remove "grunt-a")</Code> deletes that thing.{" "}
             <Code>(remove ["a" "b"])</Code> deletes each
-            name in the list.
+            name in the list. <Code>(remove "player")</Code> is an
+            error.
           </li>
           <li>
             <Code>(teleport "player" "stash")</Code> moves
@@ -1064,7 +1088,8 @@ function Things() {
           <Code>set-attr</Code> take a map of fields.{" "}
           <Code>get-attr</Code> returns the fields that thing has.{" "}
           <Code>id</Code> is valid on every type. Other fields belong to
-          one type.
+          one type. The player is always named <Code>"player"</Code>.
+          Nothing else may use that name.
         </p>
       </Block>
       <div className="overflow-x-auto">
@@ -1087,6 +1112,11 @@ function Things() {
             <AttrRow type="pickup" field="color" fieldOnly mean='A color string such as "#aa46c8". If the key is missing, the pickup is purple.' />
             <AttrRow type="pickup" field="shape" fieldOnly mean='"diamond", "square", "star", "explosion", "circle", "triangle", or "cross". If the key is missing, the pickup is a diamond.' />
             <AttrRow type="button" field="disabled" mean="true or false. If you omit the key, the button works. A disabled button does not show a use prompt." />
+            <AttrRow type="player" field="health" mean="Hit points. 0 ends the fight." />
+            <AttrRow type="player" field="ammo" fieldOnly mean="Shots left. Capped at 99." />
+            <AttrRow type="player" field="inventory" fieldOnly mean="A map from item name to a number. A missing item is nil. Pickup of a named item adds 1." />
+            <AttrRow type="player" field="x, y" fieldOnly mean="Player position." />
+            <AttrRow type="player" field="angle" fieldOnly mean="Facing angle in radians." />
           </tbody>
         </table>
       </div>
