@@ -367,10 +367,21 @@ function Syntax() {
         </p>
       </Block>
       <Block>
-        <H>Quote</H>
+        <H>Quote, comma, and @</H>
         <p>
-          <Code>(quote x)</Code> returns <Code>x</Code> and does not evaluate
-          it.
+          <Code>'x</Code> returns <Code>x</Code> as data. It does not
+          evaluate <Code>x</Code>.
+        </p>
+        <p>
+          <Code>,x</Code> is only valid inside a quote. It evaluates{" "}
+          <Code>x</Code> and puts that value in the quoted data.
+        </p>
+        <p>
+          <Code>@xs</Code> inserts a list into the list around it.{" "}
+          <Code>(+ 1 @[2 3])</Code> is the same as <Code>(+ 1 2 3)</Code>.{" "}
+          <Code>(a b @'(c d))</Code> is the same as <Code>(a b c d)</Code>.
+          The form after <Code>@</Code> must be a list. An empty list
+          inserts nothing.
         </p>
       </Block>
       <Block>
@@ -396,6 +407,10 @@ function Syntax() {
         <p>
           A map evaluates each value. The keys stay as they are. The result
           is a map.
+        </p>
+        <p>
+          <Code>(eval form)</Code> evaluates <Code>form</Code>, then
+          treats that value as code and evaluates it again.
         </p>
       </Block>
     </div>
@@ -468,6 +483,12 @@ else
           another binding in the same <Code>let</Code>. To join maps first,
           use <Code>merge</Code>.
         </p>
+        <p>
+          <Code>let!</Code> is the same as <Code>let</Code> in a normal
+          script. In a macro, <Code>let</Code> keeps its names private.
+          <Code>let!</Code> publishes those names to the body, including
+          code passed in with <Code>@body</Code>.
+        </p>
       </Block>
       <Block>
         <H>pipe</H>
@@ -529,6 +550,46 @@ else
         <p>
           <Code>(announce "Find the red key.")</Code> runs that
           function.
+        </p>
+      </Block>
+      <Block>
+        <H>defm</H>
+        <p>
+          <Code>(defm unless (test @body) ...)</Code> makes a macro. The
+          form matches <Code>def</Code>. The body runs while the script
+          loads. The arguments are the forms as written, not their values.
+          The body must return a form. That form then runs in place of the
+          call.
+        </p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
+          {`(defm unless (test @body)
+  '(if not ,test @body))
+
+(unless (get-prop "freed")
+  (say "still locked"))`}
+        </pre>
+        <p>
+          <Code>@body</Code> is only for <Code>defm</Code>. It binds leftover
+          argument forms as a list and must be last. Regular functions cannot
+          use it. <Code>,test</Code> inserts the test form. A macro can call a
+          normal <Code>def</Code>. Names from a <Code>let</Code> at the
+          call are visible in the expanded code, unless a <Code>let</Code>{" "}
+          in the expansion shadows them. The macro body itself does not
+          see those names.
+        </p>
+        <p>
+          Names a macro binds with <Code>let</Code> stay private. Use{" "}
+          <Code>let!</Code> to publish a name to the body, including
+          spliced code:
+        </p>
+        <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
+          {`(defm aif (test @body)
+  '(let! [it: ,test]
+     (if it @body)))`}
+        </pre>
+        <p>
+          A function and a macro cannot share a name.{" "}
+          <Code>(defm ...)</Code> only works at the top of a script.
         </p>
       </Block>
       <Block>
@@ -604,9 +665,25 @@ else
         </p>
       </Block>
       <Block>
-        <H>quote</H>
+        <H>' , and @</H>
         <p>
-          <Code>(quote x)</Code> returns <Code>x</Code> with no evaluation.
+          <Code>'x</Code> returns <Code>x</Code> with no evaluation.{" "}
+          <Code>,x</Code> inside a quote evaluates <Code>x</Code>.{" "}
+          <Code>@xs</Code> inserts the items of a list into the list
+          around it.
+        </p>
+      </Block>
+      <Block>
+        <H>eval</H>
+        <p>
+          <Code>(eval form)</Code> evaluates <Code>form</Code>, then
+          evaluates that value as code. It uses the same names as the
+          caller.
+        </p>
+        <p>
+          <Code>(eval '(+ 1 2))</Code> is <Code>3</Code>.{" "}
+          <Code>(eval 5)</Code> is <Code>5</Code>. A quoted call is run
+          as a call. A list like <Code>[1 2]</Code> stays a list.
         </p>
       </Block>
       <Block>

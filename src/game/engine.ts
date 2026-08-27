@@ -35,6 +35,7 @@ import {
   installFns,
   fireHandlers,
   makeEnv,
+  toMacroTable,
   nil,
   num,
   str,
@@ -934,7 +935,12 @@ export function updateGame(state: GameState, dt: number) {
     if (state.script) {
       try {
         installFns(state.script.fns, state.scriptEnv);
-        evalForms(state.script.boot, state.scriptEnv, makeHost(state));
+        evalForms(
+          state.script.boot,
+          state.scriptEnv,
+          makeHost(state),
+          toMacroTable(state.script.macros),
+        );
       } catch (err) {
         state.scriptError = err instanceof Error ? err.message : "Script error";
         pushSay(state, state.scriptError);

@@ -350,6 +350,26 @@ The result of a clause is the type of the last form in `body`. An empty body is 
 
 A `def` that is not at the top of the script is an error.
 
+### `defm`
+
+```
+(defm name (params…) body…)
+```
+
+Allowed only at the top of the script. Same clause rules as `def`. `name` cannot also be a `def`, a keyword, or a built-in.
+
+The body runs while the script loads. Each parameter is bound to the argument *form*, not the evaluated value. A positional list may end with `@rest` (often written `@body`). That binds leftover forms as `list(any())`. It must be last. A clause with `@rest` matches at least as many arguments as the names before it. `(n @rest)` covers a later `(n)` or `(n m)`. Regular functions (`def`, `fn`, `on`) cannot use `@rest`.
+
+The result of the body is a form. That form replaces the call, then it is typed and run.
+
+A `let` in the result is private: its names are renamed so they do not clash with the call site. `let!` is the same as `let` after expansion, but those names are not renamed, so spliced caller code can see them.
+
+Free names in the expansion resolve at the call site. The `defm` body itself runs in the script’s function environment, not in a caller `let`.
+
+The type of a macro call is the type of the expanded form. Expansion errors are reported on the call.
+
+A `defm` that is not at the top of the script is an error.
+
 ### `fn`
 
 ```
@@ -396,6 +416,14 @@ Event payload keys, when bound without a literal pattern, have the types in the 
 ```
 
 `map` must be a map (`empty_map()` or `[k: T …]`), or `dynamic` of a type whose intersection with a map is not `none()`. Each key becomes a name in `body` with that key’s type. The result is the last form of `body`.
+
+### `let!`
+
+```
+(let! map body…)
+```
+
+Typed the same as `let`. In a macro expansion, `let!` keeps the map keys as written so spliced caller code can use those names. After expansion it is a `let`.
 
 ### `if`, `else`, `not` (inside `if`)
 
@@ -463,13 +491,31 @@ Each argument is typed. The result is `dynamic(type of the last argument or fals
 
 `x` may have any type. The result is `bool()`.
 
-### `quote`
+### Quote, comma, and `@`
 
 ```
-(quote form)
+'form
+,form
+@form
 ```
 
-The result is the type of `form` as data, without calling it. A quoted symbol has type `unknown_string()`. A quoted number has type `number()`. `pipe` uses `quote` internally.
+`'` quotes. The form is data. It is not called. A quoted word has type `unknown_string()`. A quoted number has type `number()`.
+
+`,` is only valid inside `'`. It evaluates that form and inserts the value.
+
+`@` inserts a list into the list around it. The form after `@` must be a list. `(+ 1 @[2 3])` is `(+ 1 2 3)`. `(a b @'(c d))` is `(a b c d)`. `'(a @xs)` splices the value of `xs`. An empty list inserts nothing.
+
+`pipe` uses `'` internally so a list value is not called as a function.
+
+A comma outside `'` is an error. `@` outside a list is an error.
+
+### `eval`
+
+```
+(eval form)
+```
+
+`form` may have any type. The argument is evaluated. Then that value is evaluated again as code, in the same names. The result is `dynamic(any())`. A quoted call such as `'(+ 1 2)` runs as a call. A list `[1 2]` stays a list.
 
 ### `after`
 

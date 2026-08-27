@@ -265,6 +265,12 @@ export function createNightVaultLevel(): GameLevel {
   const script = prettyScript(`(def announce (msg)
   (say (str ">> " msg)))
 
+; Run the body the first time only.
+(defm once (flag @body)
+  '(if not (get-prop ,flag)
+     (set-prop ,flag true)
+     @body))
+
 ; Lock the doors. Tell the player the first job.
 (on start ()
   (set-attr "door-cell" [locked: true])
@@ -275,30 +281,26 @@ export function createNightVaultLevel(): GameLevel {
 
 ; A shot on the fuse opens the cage.
 (on shoot (target: "panel")
-  (if not (get-prop "freed")
+  (once "freed"
     (set-wall "panel" [type: "empty"])
     (set-attr "door-cell" [locked: false open: true])
-    (set-prop "freed" true)
     (announce "Cage fried. Card is in the south locker.")))
 
 ; The card opens the vault and calls the warden.
 (on pickup (target: "key-card")
   (set-attr "door-vault" [locked: false])
   (announce "Vault lock dropped. Alarm!")
-  (if not (get-prop "sprung")
-    (set-prop "sprung" true)
+  (once "sprung"
     (spawn [11.5 6.5] "enemy" [id: "warden" variant: "bruiser"])))
 
 (on enter (zone: "ambush")
-  (if not (get-prop "add")
-    (set-prop "add" true)
+  (once "add"
     (spawn [9.5 6.5] "enemy" [id: "runner" variant: "grunt"])
     (announce "Movement in the hall!")))
 
 (on enter (zone: "pad-in")
   (if (get-attr "player" ["inventory" "key-card"])
-    (if not (get-prop "hopped")
-      (set-prop "hopped" true)
+    (once "hopped"
       (teleport "player" "stash")
       (announce "Sump pipe. Pad home is on the floor."))
   else
@@ -313,8 +315,7 @@ export function createNightVaultLevel(): GameLevel {
 (on hurt (target: "player")
   (update-prop "hits" (fn + #1 1))
   (if (>= (get-prop "hits") 3)
-    (if not (get-prop "warned")
-      (set-prop "warned" true)
+    (once "warned"
       (announce "You are leaking. Find a pack."))))
 `);
 

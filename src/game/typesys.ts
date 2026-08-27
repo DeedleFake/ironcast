@@ -4,9 +4,10 @@ import {
   BUILTINS,
   EVENT_ARGS,
   KEYWORDS,
+  LispError,
+  compileForms,
   type LispVal,
   type Params,
-  parseCallRaw,
   parseFn,
   parseIfArgs,
   parseLisp,
@@ -55,7 +56,7 @@ export type Type =
   | { k: "dyn"; t: Type };
 
 export type Arrow =
-  | { k: "pos"; args: Type[]; ret: Type }
+  | { k: "pos"; args: Type[]; ret: Type; rest?: boolean }
   | { k: "key"; args: Map<string, Type>; ret: Type };
 
 const ENTITY_KINDS: EntityType[] = [
@@ -192,6 +193,10 @@ function fromUsage(t: Type): Type {
 }
 
 function collectAliases(v: LispVal, into: Map<string, string>) {
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    collectAliases(v.v, into);
+    return;
+  }
   if (v.k === "map") {
     for (const [k, val] of v.v) {
       if (val.k === "sym") into.set(k, val.v);
@@ -271,7 +276,9 @@ export function printType(t: Type): string {
 
 function printArrow(ar: Arrow): string {
   if (ar.k === "pos") {
-    return `(${ar.args.map(printType).join(" ")}) -> ${printType(ar.ret)}`;
+    const args = ar.args.map(printType);
+    if (ar.rest) args.push("...");
+    return `(${args.join(" ")}) -> ${printType(ar.ret)}`;
   }
   const keys = [...ar.args.entries()]
     .map(([k, v]) => `${k}: ${printType(v)}`)
@@ -522,6 +529,11 @@ function kindOf(v: LispVal): Type {
       return { k: "fn", arrows: [] };
     case "comment":
       return tNil;
+    case "quote":
+      return kindOf(v.v);
+    case "unquote":
+    case "splice":
+      return tAny;
   }
 }
 
@@ -599,6 +611,11 @@ class Checker {
   noteParams(form: LispVal | undefined, env: Env) {
     if (!form || form.k !== "list") return;
     for (const p of form.v) {
+      if (p.k === "splice" && p.v.k === "sym") {
+        const t = env.get(p.v.v);
+        if (t) this.note(p.v, t, p.v.v);
+        continue;
+      }
       if (p.k !== "sym") continue;
       const name = p.v.endsWith(":") ? p.v.slice(0, -1) : p.v;
       const t = env.get(name);
@@ -668,6 +685,15 @@ class Checker {
     if (v.k === "nil") return tNil;
     if (v.k === "str") return tLit(v.v);
     if (v.k === "fn") return { k: "fn", arrows: [] };
+    if (v.k === "quote") return this.typeQuote(v.v, env, 1);
+    if (v.k === "unquote") {
+      this.err(v, "comma not inside quote");
+      return tDyn(tAny);
+    }
+    if (v.k === "splice") {
+      this.err(v, "@ needs a list to insert into");
+      return tDyn(tAny);
+    }
     if (v.k === "sym") {
       if (v.v === "true") return tTrue;
       if (v.v === "false") return tFalse;
@@ -694,13 +720,18 @@ class Checker {
     }
     if (v.k !== "list") return tAny;
     if (v.vec) {
-      const items = v.v.filter((x) => x.k !== "comment");
-      if (!items.length) return tEmptyList;
-      return tTuple(items.map((x) => this.typeForm(x, env)));
+      const { types } = this.typeSpread(v.v, env, v);
+      if (!types.length) return tEmptyList;
+      return tTuple(types);
     }
     const xs = v.v.filter((x) => x.k !== "comment");
     if (!xs.length) return tNil;
     const head = xs[0]!;
+    if (head.k === "splice") {
+      const { types } = this.typeSpread(xs, env, v);
+      if (!types.length) return tNil;
+      return this.applyFnType(types[0]!, types.slice(1), v);
+    }
     if (head.k === "sym") {
       const spec = this.special(head.v, xs.slice(1), env, v);
       if (spec !== undefined) return spec;
@@ -725,8 +756,6 @@ class Checker {
     form: LispVal,
   ): Type | undefined {
     switch (name) {
-      case "quote":
-        return args[0] ? kindOf(args[0]) : tNil;
       case "if":
         return this.typeIf(args, env, form);
       case "and": {
@@ -748,9 +777,21 @@ class Checker {
         this.err(form, "(def ...) only works at the top of a script");
         return tNil;
       case "let":
+      case "let!":
         return this.typeLet(args, env, form);
+      case "defm":
+        this.err(form, "(defm ...) only works at the top of a script");
+        return tNil;
       case "pipe":
         return this.typePipe(args, env, form);
+      case "eval": {
+        if (args.length !== 1) {
+          this.err(form, "eval needs one form");
+          return tDyn(tAny);
+        }
+        this.typeForm(args[0]!, env);
+        return tDyn(tAny);
+      }
       case "after": {
         this.expect(this.typeForm(args[0] ?? { k: "nil" }, env), tNum, args[0], "after");
         this.forms(args.slice(1), env);
@@ -871,6 +912,141 @@ class Checker {
     return ret;
   }
 
+  typeQuote(v: LispVal, env: Env, depth: number): Type {
+    if (v.k === "unquote") {
+      if (depth === 1) return this.typeForm(v.v, env);
+      return this.typeQuote(v.v, env, depth - 1);
+    }
+    if (v.k === "quote") return this.typeQuote(v.v, env, depth + 1);
+    if (v.k === "splice") {
+      if (depth !== 1) return tAny;
+      const inner = this.typeForm(v.v, env);
+      this.expectListish(inner, v);
+      return inner;
+    }
+    if (v.k === "list") {
+      if (depth !== 1) {
+        return kindOf(v);
+      }
+      const { types } = this.typeSpread(v.v, env, v, true);
+      if (v.vec) return types.length ? tTuple(types) : tEmptyList;
+      if (!types.length) return tEmptyList;
+      return tList(tOr(types));
+    }
+    if (v.k === "map") {
+      if (!v.v.size) return tEmptyMap;
+      const keys = new Map<string, Type>();
+      for (const [k, val] of v.v) keys.set(k, this.typeQuote(val, env, depth));
+      return tMap(keys);
+    }
+    if (v.k === "sym") {
+      if (v.v === "true") return tTrue;
+      if (v.v === "false") return tFalse;
+      if (v.v === "nil") return tNil;
+      return tUStr;
+    }
+    return kindOf(v);
+  }
+
+  expectListish(t: Type, at: LispVal) {
+    const u = unwrap(t);
+    if (
+      u.k === "list" ||
+      u.k === "tuple" ||
+      u.k === "empty_list" ||
+      u.k === "any" ||
+      t.k === "dyn"
+    ) {
+      if (t.k === "dyn" && u.k !== "list" && u.k !== "tuple" && u.k !== "empty_list" && u.k !== "any") {
+        this.expect(t, tOr([tEmptyList, tList(tAny)]), at, "@");
+      }
+      return;
+    }
+    this.expect(t, tOr([tEmptyList, tList(tAny)]), at, "@");
+  }
+
+  typeSpread(
+    items: LispVal[],
+    env: Env,
+    at: LispVal,
+    quoteSplice = false,
+  ): { types: Type[]; open: boolean } {
+    const types: Type[] = [];
+    let open = false;
+    for (const a of items) {
+      if (a.k === "comment") continue;
+      if (a.k === "splice") {
+        const inner = quoteSplice
+          ? a.v.k === "unquote"
+            ? this.typeForm(a.v.v, env)
+            : this.typeForm(a.v, env)
+          : this.typeForm(a.v, env);
+        this.expectListish(inner, a);
+        const u = unwrap(inner);
+        if (u.k === "tuple") types.push(...u.items);
+        else if (u.k === "empty_list") continue;
+        else if (u.k === "list") {
+          types.push(u.el);
+          open = true;
+        } else {
+          open = true;
+        }
+        continue;
+      }
+      types.push(quoteSplice ? this.typeQuote(a, env, 1) : this.typeForm(a, env));
+    }
+    return { types, open };
+  }
+
+  typeCallParts(raw: LispVal[], env: Env, form: LispVal) {
+    const pos: Type[] = [];
+    const rawPos: LispVal[] = [];
+    const keys = new Map<string, Type>();
+    const keyRaw: { name: string; raw: LispVal }[] = [];
+    let keyed = false;
+    let open = false;
+    for (let i = 0; i < raw.length; ) {
+      const a = raw[i]!;
+      if (a.k === "comment") {
+        i += 1;
+        continue;
+      }
+      if (a.k === "splice") {
+        if (keyed) {
+          this.err(a, "positional argument after key:");
+          break;
+        }
+        const { types, open: more } = this.typeSpread([a], env, form);
+        pos.push(...types);
+        rawPos.push(...types.map(() => a));
+        open = open || more;
+        i += 1;
+        continue;
+      }
+      if (a.k === "sym" && a.v.endsWith(":") && a.v.length > 1) {
+        keyed = true;
+        const name = a.v.slice(0, -1);
+        const val = raw[i + 1];
+        if (!val) {
+          this.err(a, `missing value for ${a.v}`);
+          break;
+        }
+        keys.set(name, this.typeForm(val, env));
+        keyRaw.push({ name, raw: val });
+        i += 2;
+        continue;
+      }
+      if (keyed) {
+        this.err(a, "positional argument after key:");
+        break;
+      }
+      pos.push(this.typeForm(a, env));
+      rawPos.push(a);
+      i += 1;
+    }
+    return { pos, keys, rawPos, keyRaw, open };
+  }
+
   typeFn(args: LispVal[], env: Env, form: LispVal): Type {
     try {
       const parsed = parseFn(args);
@@ -921,6 +1097,7 @@ class Checker {
       for (const p of params.pats) {
         if (p.k === "bind") env.set(p.name, tDyn(tAny));
       }
+      if (params.rest) env.set(params.rest, tList(tAny));
       return;
     }
     for (const { name, pat } of params.pats) {
@@ -939,6 +1116,7 @@ class Checker {
       for (const p of params.pats) {
         if (p.k === "bind") bump(p.name);
       }
+      if (params.rest) bump(params.rest);
       return;
     }
     for (const { pat } of params.pats) {
@@ -970,7 +1148,7 @@ class Checker {
         if (p.k === "lit") return kindOf(p.value);
         return env.get(p.name) ?? tAny;
       });
-      return { k: "pos", args, ret };
+      return { k: "pos", args, ret, rest: !!params.rest };
     }
     const args = new Map<string, Type>();
     for (const { name, pat } of params.pats) {
@@ -981,16 +1159,7 @@ class Checker {
   }
 
   apply(fnT: Type, raw: LispVal[], env: Env, form: LispVal): Type {
-    let parts;
-    try {
-      parts = parseCallRaw(raw);
-    } catch (e) {
-      this.err(form, e instanceof Error ? e.message : "bad call");
-      return tDyn(tAny);
-    }
-    const pos = parts.pos.map((a) => this.typeForm(a, env));
-    const keys = new Map<string, Type>();
-    for (const k of parts.keys) keys.set(k.name, this.typeForm(k.raw, env));
+    const parts = this.typeCallParts(raw, env, form);
     const inner = unwrap(fnT);
     if (fnT.k === "dyn") return tDyn(tAny);
     if (inner.k === "any") return tDyn(tAny);
@@ -998,8 +1167,13 @@ class Checker {
       this.err(form, `not a function: ${printType(fnT)}`);
       return tDyn(tAny);
     }
-    const ret = this.applyArrows(inner.arrows, pos, keys, form);
-    this.refineCall(inner.arrows, parts.pos, parts.keys, env);
+    const before = this.diags.length;
+    const ret = this.applyArrows(inner.arrows, parts.pos, parts.keys, form);
+    if (parts.open && this.diags.length > before) {
+      this.diags.length = before;
+      return tDyn(tAny);
+    }
+    this.refineCall(inner.arrows, parts.rawPos, parts.keyRaw, env);
     return ret;
   }
 
@@ -1024,6 +1198,11 @@ class Checker {
     for (const ar of arrows) {
       if (ar.k === "pos") {
         if (keys.size) continue;
+        if (ar.rest) {
+          if (pos.length < ar.args.length) continue;
+          if (ar.args.every((t, i) => argFits(pos[i]!, t))) rets.push(ar.ret);
+          continue;
+        }
         if (ar.args.length !== pos.length) continue;
         if (ar.args.every((t, i) => argFits(pos[i]!, t))) rets.push(ar.ret);
         continue;
@@ -1051,7 +1230,9 @@ class Checker {
     env: Env,
   ) {
     const posAr = arrows.filter(
-      (a): a is Extract<Arrow, { k: "pos" }> => a.k === "pos" && a.args.length === posRaw.length,
+      (a): a is Extract<Arrow, { k: "pos" }> =>
+        a.k === "pos" &&
+        (a.args.length === posRaw.length || (!!a.rest && a.args.length <= posRaw.length)),
     );
     for (let i = 0; i < posRaw.length; i++) {
       const arg = posRaw[i];
@@ -1094,18 +1275,11 @@ class Checker {
   }
 
   callBuiltin(name: string, raw: LispVal[], env: Env, form: LispVal): Type {
-    let parts;
-    try {
-      parts = parseCallRaw(raw);
-    } catch (e) {
-      this.err(form, e instanceof Error ? e.message : "bad call");
-      return tDyn(tAny);
-    }
-    if (parts.keys.length) {
+    const parts = this.typeCallParts(raw, env, form);
+    if (parts.keys.size) {
       this.err(form, `${name} does not take keyword arguments`);
     }
-    const pos = parts.pos.map((a) => this.typeForm(a, env));
-    return this.callBuiltinTyped(name, pos, form, env, parts.pos);
+    return this.callBuiltinTyped(name, parts.pos, form, env, parts.rawPos);
   }
 
   callBuiltinTyped(
@@ -1676,6 +1850,30 @@ export function checkScript(src: string, world: TypeWorld): CheckResult {
     };
   }
   collectSpawnIds(parsed.forms, world);
+  let program;
+  try {
+    program = compileForms(parsed.forms);
+  } catch (e) {
+    const start = e instanceof LispError ? (e.start ?? 0) : 0;
+    const end = e instanceof LispError ? (e.end ?? Math.min(src.length, start + 1)) : Math.min(src.length, 1);
+    return {
+      diagnostics: [
+        {
+          start,
+          end: Math.max(end, start + 1),
+          message: e instanceof Error ? e.message : "Invalid script",
+        },
+      ],
+      hints: [],
+    };
+  }
+  collectSpawnIds(program.boot, world);
+  for (const f of program.fns) {
+    for (const c of f.clauses) collectSpawnIds(c.body, world);
+  }
+  for (const h of program.handlers) {
+    for (const c of h.clauses) collectSpawnIds(c.body, world);
+  }
   const chk = new Checker(world);
   const env: Env = new Map();
 
@@ -1695,51 +1893,44 @@ export function checkScript(src: string, world: TypeWorld): CheckResult {
     body: LispVal[];
     paramsForm: LispVal;
   }[] = [];
-  const boot: LispVal[] = [];
+  const boot: LispVal[] = [...program.boot];
+
+  for (const f of program.fns) {
+    for (const c of f.clauses) {
+      fnForms.push({
+        name: f.name,
+        nameForm: f.nameForm ?? { k: "sym", v: f.name },
+        form: f.nameForm ?? c.paramsForm ?? { k: "nil" },
+        params: c.params,
+        body: c.body,
+        paramsForm: c.paramsForm ?? { k: "list", v: [] },
+      });
+    }
+  }
+  for (const h of program.handlers) {
+    for (const c of h.clauses) {
+      onForms.push({
+        event: h.event,
+        form: c.paramsForm ?? { k: "sym", v: h.event },
+        params: c.params,
+        body: c.body,
+        paramsForm: c.paramsForm ?? { k: "list", v: [] },
+      });
+    }
+  }
 
   for (const form of parsed.forms) {
     if (form.k === "comment") continue;
-    if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "on") {
-      const ev = form.v[1];
-      if (!ev || ev.k !== "sym") {
-        chk.err(form, "(on event (args...) body) needs an event name");
-        continue;
-      }
-      if (!EVENT_ARGS[ev.v]) chk.err(ev, `unknown event ${ev.v}`);
-      const paramsForm = form.v[2];
-      if (!paramsForm || paramsForm.k !== "list") {
-        chk.err(form, "(on event (args...) body) needs a parameter list");
-        continue;
-      }
+    if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "defm") {
+      if (form.v[1]?.k !== "sym" || form.v[2]?.k !== "list") continue;
       try {
-        const params = parseParams(paramsForm, "on");
-        onForms.push({ event: ev.v, form, params, body: form.v.slice(3), paramsForm });
+        const params = parseParams(form.v[2], "defm");
+        chk.typeClause(params, form.v.slice(3), env, form.v[2]);
+        if (form.v[1].span) chk.note(form.v[1], tDyn(tAny), form.v[1].v);
       } catch (e) {
-        chk.err(form, e instanceof Error ? e.message : "bad on");
+        chk.err(form, e instanceof Error ? e.message : "bad defm");
       }
-      continue;
     }
-    if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "def") {
-      if (form.v[1]?.k !== "sym" || form.v[2]?.k !== "list") {
-        chk.err(form, "(def name (args...) body)");
-        continue;
-      }
-      try {
-        const params = parseParams(form.v[2], "def");
-        fnForms.push({
-          name: form.v[1].v,
-          nameForm: form.v[1],
-          form,
-          params,
-          body: form.v.slice(3),
-          paramsForm: form.v[2],
-        });
-      } catch (e) {
-        chk.err(form, e instanceof Error ? e.message : "bad def");
-      }
-      continue;
-    }
-    boot.push(form);
   }
 
   const byName = new Map<string, FnForm[]>();
@@ -1780,6 +1971,7 @@ export function checkScript(src: string, world: TypeWorld): CheckResult {
       }
     }
     for (const o of onForms) {
+      if (!EVENT_ARGS[o.event]) chk.err(o.form, `unknown event ${o.event}`);
       const e = new Map(env);
       chk.bindParams(o.params, e);
       bindEvent(o.event, o.params, e, world);

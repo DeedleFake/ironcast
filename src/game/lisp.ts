@@ -10,6 +10,9 @@ export type LispVal = (
   | { k: "sym"; v: string }
   | { k: "list"; v: LispVal[]; vec?: boolean }
   | { k: "map"; v: Map<string, LispVal>; keySpans?: Map<string, { start: number; end: number }> }
+  | { k: "quote"; v: LispVal }
+  | { k: "unquote"; v: LispVal }
+  | { k: "splice"; v: LispVal }
   | { k: "comment"; v: string }
   | { k: "fn"; clauses: Clause[]; keys: string[]; env: Env }
 ) & { cmt?: string; blank?: boolean; broke?: boolean; span?: { start: number; end: number } };
@@ -19,10 +22,10 @@ export type Pattern =
   | { k: "lit"; value: LispVal };
 
 export type Params =
-  | { k: "pos"; pats: Pattern[] }
+  | { k: "pos"; pats: Pattern[]; rest?: string }
   | { k: "key"; pats: { name: string; pat: Pattern }[] };
 
-export type Clause = { params: Params; body: LispVal[] };
+export type Clause = { params: Params; body: LispVal[]; paramsForm?: LispVal };
 
 export type Env = {
   parent: Env | null;
@@ -50,10 +53,12 @@ export const KEYWORDS = new Set([
   "and",
   "or",
   "not",
-  "quote",
   "on",
   "after",
   "pipe",
+  "eval",
+  "defm",
+  "let!",
 ]);
 
 export const BUILTINS = new Set([
@@ -409,6 +414,12 @@ export function printVal(v: LispVal): string {
     }
     case "comment":
       return v.v;
+    case "quote":
+      return "'" + printVal(v.v);
+    case "unquote":
+      return "," + printVal(v.v);
+    case "splice":
+      return "@" + printVal(v.v);
   }
 }
 
@@ -438,6 +449,11 @@ export function tokenize(src: string): Token[] {
       i++;
       continue;
     }
+    if (c === "'" || c === "," || c === "@") {
+      push("keyword", c);
+      i++;
+      continue;
+    }
     if (c === '"') {
       let j = i + 1;
       let s = '"';
@@ -457,7 +473,7 @@ export function tokenize(src: string): Token[] {
       continue;
     }
     let j = i + 1;
-    while (j < n && !" \t\n\r();[]".includes(src[j]!)) j++;
+    while (j < n && !" \t\n\r();[]',@".includes(src[j]!)) j++;
     const word = src.slice(i, j);
     if (/^[+-]?\d+(\.\d+)?$/.test(word)) push("number", word);
     else if (/^#[1-9]\d*$/.test(word)) push("keyword", word);
@@ -600,7 +616,18 @@ function read(p: { s: string; i: number }): LispVal {
   if (c === "[") return readDelimited(p, "]");
   if (c === ")") throw new LispError("unexpected )", p.i, p.i + 1);
   if (c === "]") throw new LispError("unexpected ]", p.i, p.i + 1);
-  if (c === "'") throw new LispError("unexpected '", p.i, p.i + 1);
+  if (c === "'" || c === "," || c === "@") {
+    p.i++;
+    const inner = read(p);
+    const node: LispVal =
+      c === "'"
+        ? { k: "quote", v: inner }
+        : c === ","
+          ? { k: "unquote", v: inner }
+          : { k: "splice", v: inner };
+    const end = inner.span?.end ?? p.i;
+    return attachTrail(p, withSpan(start, end, node));
+  }
   if (c === '"') {
     p.i++;
     let out = "";
@@ -622,7 +649,7 @@ function read(p: { s: string; i: number }): LispVal {
     throw new LispError("unterminated string", start, p.i);
   }
   let j = p.i + 1;
-  while (j < p.s.length && !" \t\n\r();[]".includes(p.s[j]!)) j++;
+  while (j < p.s.length && !" \t\n\r();[]',@".includes(p.s[j]!)) j++;
   const word = p.s.slice(p.i, j);
   p.i = j;
   if (word === "true") return attachTrail(p, withSpan(start, j, bool(true)));
@@ -657,6 +684,8 @@ const BODY_SPECIALS = new Set([
   "if",
   "after",
   "pipe",
+  "let!",
+  "defm",
 ]);
 
 export type IfClause = { test: LispVal | null; not: boolean; body: LispVal[] };
@@ -726,6 +755,9 @@ function fnIsMulti(v: { k: "list"; v: LispVal[] }): boolean {
 
 function hasBreakComment(v: LispVal): boolean {
   if (v.k === "comment") return true;
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    return Boolean(v.v.cmt) || hasBreakComment(v.v);
+  }
   if (v.k === "map") {
     return [...v.v.values()].some(
       (x) => Boolean(x.cmt) || hasBreakComment(x),
@@ -757,6 +789,10 @@ function pushPrefixed(lines: string[], prefix: string, text: string) {
 
 function formatVal(v: LispVal, indent: number): string {
   if (v.k === "comment") return v.v;
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    const mark = v.k === "quote" ? "'" : v.k === "unquote" ? "," : "@";
+    return suffixCmt(v, prefixLines(mark, formatVal(v.v, indent)));
+  }
   if (v.k === "map") return formatMap(v, indent);
   if (v.k !== "list") return formatAtom(v);
   const empty = v.vec ? "[]" : "()";
@@ -891,18 +927,18 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     }
   }
 
-  if (headName === "def") {
+  if (headName === "def" || headName === "defm") {
     const nm = v.v[1] ? formatVal(v.v[1], indent) : "";
     const rest = v.v.slice(2);
     if (rest.length >= 2 && rest[0]?.k === "list") {
-      const lines = [`(def ${nm} ${formatInline(rest[0]!)}`];
+      const lines = [`(${headName} ${nm} ${formatInline(rest[0]!)}`];
       for (const item of rest.slice(1)) {
         pushPrefixed(lines, body, formatVal(item, indent + 1));
       }
       return closeOn(lines);
     }
-    if (rest.length === 0) return `(def ${nm})`;
-    const lines = [`(def ${nm}`];
+    if (rest.length === 0) return `(${headName} ${nm})`;
+    const lines = [`(${headName} ${nm}`];
     for (const item of rest) {
       pushPrefixed(lines, body, formatVal(item, indent + 1));
     }
@@ -940,11 +976,11 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
     return closeOn(lines);
   }
 
-  if (headName === "let") {
+  if (headName === "let" || headName === "let!") {
     const binds = v.v[1];
     const bindStr = binds ? formatVal(binds, indent + 1) : "[:]";
     const lines: string[] = [];
-    pushPrefixed(lines, "(let ", bindStr);
+    pushPrefixed(lines, `(${headName} `, bindStr);
     for (const item of v.v.slice(2)) {
       pushPrefixed(lines, body, formatVal(item, indent + 1));
     }
@@ -999,6 +1035,10 @@ function formatBlock(v: { k: "list"; v: LispVal[] }, indent: number): string {
 }
 
 function formatInline(v: LispVal): string {
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    const mark = v.k === "quote" ? "'" : v.k === "unquote" ? "," : "@";
+    return mark + formatInline(v.v);
+  }
   if (v.k !== "list") return formatAtom(v);
   const open = v.vec ? "[" : "(";
   const close = v.vec ? "]" : ")";
@@ -1014,6 +1054,10 @@ function formatInline(v: LispVal): string {
 
 function formatCore(v: LispVal): string {
   if (v.k === "comment") return v.v;
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    const mark = v.k === "quote" ? "'" : v.k === "unquote" ? "," : "@";
+    return mark + formatCore(v.v);
+  }
   if (v.k === "list") return formatInline(v);
   if (v.k === "map") return formatMap(v, 0);
   return formatAtomCore(v);
@@ -1039,6 +1083,12 @@ function formatAtomCore(v: LispVal): string {
       return formatInline(v);
     case "map":
       return formatMap(v, 0);
+    case "quote":
+      return "'" + formatAtomCore(v.v);
+    case "unquote":
+      return "," + formatAtomCore(v.v);
+    case "splice":
+      return "@" + formatAtomCore(v.v);
   }
 }
 
@@ -1112,12 +1162,14 @@ export type Handler = {
 export type NamedFn = {
   name: string;
   clauses: Clause[];
+  nameForm?: LispVal;
 };
 
 export type Program = {
   handlers: Handler[];
   boot: LispVal[];
   fns: NamedFn[];
+  macros: NamedFn[];
 };
 
 const BUDGET = 8000;
@@ -1125,92 +1177,196 @@ const BUDGET = 8000;
 export function compileProgram(src: string): { ok: true; program: Program } | { ok: false; error: string } {
   const parsed = parseLisp(src);
   if (!parsed.ok) return parsed;
+  try {
+    return { ok: true, program: compileForms(parsed.forms) };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : "Invalid script" };
+  }
+}
+
+export function compileForms(forms: LispVal[]): Program {
   const onMap = new Map<string, Clause[]>();
   const fnMap = new Map<string, Clause[]>();
+  const fnNameForm = new Map<string, LispVal>();
+  const macroMap = new Map<string, Clause[]>();
+  const macroNameForm = new Map<string, LispVal>();
+  const eventForm = new Map<string, LispVal>();
   const boot: LispVal[] = [];
-  let last: { t: "on"; name: string } | { t: "fn"; name: string } | null = null;
+  let last: { t: "on" | "fn" | "macro"; name: string } | null = null;
   const breakAdj = () => {
     last = null;
   };
-  for (const form of parsed.forms) {
+
+  const addFn = (
+    map: Map<string, Clause[]>,
+    kind: "fn" | "macro",
+    name: string,
+    params: Params,
+    body: LispVal[],
+    paramsForm: LispVal,
+    nameForm: LispVal,
+    adj: boolean,
+  ) => {
+    if (adj && map.has(name) && !(last?.t === kind && last.name === name)) {
+      const who = kind === "macro" ? "defm" : "def";
+      throw new LispError(`(${who} ${name} ...) must sit next to the last (${who} ${name} ...)`);
+    }
+    const list = map.get(name) ?? [];
+    if (unreachableBy(list, params)) {
+      throw new LispError(`unreachable clause for ${name}`);
+    }
+    list.push({ params, body, paramsForm });
+    map.set(name, list);
+    last = { t: kind, name };
+    if (kind === "fn") fnNameForm.set(name, nameForm);
+    else macroNameForm.set(name, nameForm);
+  };
+
+  for (const form of forms) {
     if (form.k === "comment") continue;
     if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "on") {
       const ev = form.v[1];
       if (!ev || ev.k !== "sym") {
-        return { ok: false, error: "(on event (args...) body) needs an event name" };
+        throw new LispError("(on event (args...) body) needs an event name");
       }
       const paramsForm = form.v[2];
       if (!paramsForm || paramsForm.k !== "list") {
-        return { ok: false, error: "(on event (args...) body) needs a parameter list" };
+        throw new LispError("(on event (args...) body) needs a parameter list");
       }
       if (onMap.has(ev.v) && !(last?.t === "on" && last.name === ev.v)) {
-        return {
-          ok: false,
-          error: `(on ${ev.v} ...) must sit next to the last (on ${ev.v} ...)`,
-        };
+        throw new LispError(`(on ${ev.v} ...) must sit next to the last (on ${ev.v} ...)`);
       }
-      try {
-        const params = parseParams(paramsForm, "on");
-        const list = onMap.get(ev.v) ?? [];
-        if (unreachableBy(list, params)) {
-          return { ok: false, error: `unreachable clause for ${ev.v}` };
-        }
-        list.push({ params, body: form.v.slice(3) });
-        onMap.set(ev.v, list);
-        last = { t: "on", name: ev.v };
-      } catch (e) {
-        return {
-          ok: false,
-          error: e instanceof Error ? e.message : "Invalid on parameters",
-        };
+      const params = parseParams(paramsForm, "on");
+      const list = onMap.get(ev.v) ?? [];
+      if (unreachableBy(list, params)) {
+        throw new LispError(`unreachable clause for ${ev.v}`);
       }
+      list.push({ params, body: form.v.slice(3), paramsForm });
+      onMap.set(ev.v, list);
+      eventForm.set(ev.v, ev);
+      last = { t: "on", name: ev.v };
       continue;
     }
-    if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "def") {
-      if (!isTopFnDef(form)) {
-        return { ok: false, error: "(def name (args...) body)" };
+    if (isTopNamed(form, "def")) {
+      if (macroMap.has(form.v[1].v)) {
+        throw new LispError(`${form.v[1].v} cannot be both a function and a macro`);
       }
+      const params = parseParams(form.v[2], "def");
+      addFn(fnMap, "fn", form.v[1].v, params, form.v.slice(3), form.v[2], form.v[1], true);
+      continue;
+    }
+    if (isTopNamed(form, "defm")) {
       const name = form.v[1].v;
-      if (fnMap.has(name) && !(last?.t === "fn" && last.name === name)) {
-        return {
-          ok: false,
-          error: `(def ${name} ...) must sit next to the last (def ${name} ...)`,
-        };
+      if (fnMap.has(name)) {
+        throw new LispError(`${name} cannot be both a function and a macro`);
       }
-      try {
-        const params = parseParams(form.v[2], "def");
-        const list = fnMap.get(name) ?? [];
-        if (unreachableBy(list, params)) {
-          return { ok: false, error: `unreachable clause for ${name}` };
-        }
-        list.push({ params, body: form.v.slice(3) });
-        fnMap.set(name, list);
-        last = { t: "fn", name };
-      } catch (e) {
-        return {
-          ok: false,
-          error: e instanceof Error ? e.message : "Invalid def parameters",
-        };
+      if (KEYWORDS.has(name) || (BUILTINS.has(name) && name !== "true" && name !== "false" && name !== "nil")) {
+        throw new LispError(`cannot redefine ${name}`);
       }
+      const params = parseParams(form.v[2], "defm");
+      addFn(macroMap, "macro", name, params, form.v.slice(3), form.v[2], form.v[1], true);
       continue;
     }
     breakAdj();
     boot.push(form);
   }
+
+  const env = makeEnv();
+  const fns: NamedFn[] = [];
+  for (const [name, clauses] of fnMap) {
+    fns.push({ name, clauses, nameForm: fnNameForm.get(name) });
+  }
+  const macros: NamedFn[] = [];
+  for (const [name, clauses] of macroMap) {
+    macros.push({ name, clauses, nameForm: macroNameForm.get(name) });
+  }
+  installFns(fns, env);
+  const macroTable = toMacroTable(macros);
+  const ctx: Ctx = {
+    budget: BUDGET,
+    host: dummyHost(),
+    macros: macroTable,
+    macroEnv: env,
+  };
+
+  const expandBody = (clauses: Clause[]) => {
+    for (const c of clauses) {
+      c.body = c.body.map((b) => expandVal(b, env, ctx));
+    }
+  };
+
+  const takeExpanded = (form: LispVal) => {
+    if (isTopNamed(form, "def")) {
+      if (macroTable.has(form.v[1].v) || macroMap.has(form.v[1].v)) {
+        throw new LispError(`${form.v[1].v} cannot be both a function and a macro`);
+      }
+      const params = parseParams(form.v[2], "def");
+      addFn(fnMap, "fn", form.v[1].v, params, form.v.slice(3), form.v[2], form.v[1], false);
+      env.vars.set(form.v[1].v, makeFnVal(fnMap.get(form.v[1].v)!, env));
+      return true;
+    }
+    if (isTopNamed(form, "defm")) {
+      const name = form.v[1].v;
+      if (fnMap.has(name)) {
+        throw new LispError(`${name} cannot be both a function and a macro`);
+      }
+      const params = parseParams(form.v[2], "defm");
+      addFn(macroMap, "macro", name, params, form.v.slice(3), form.v[2], form.v[1], false);
+      macroTable.set(name, macroMap.get(name)!);
+      return true;
+    }
+    if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "on") {
+      const ev = form.v[1];
+      if (!ev || ev.k !== "sym") {
+        throw new LispError("(on event (args...) body) needs an event name");
+      }
+      const paramsForm = form.v[2];
+      if (!paramsForm || paramsForm.k !== "list") {
+        throw new LispError("(on event (args...) body) needs a parameter list");
+      }
+      const params = parseParams(paramsForm, "on");
+      const list = onMap.get(ev.v) ?? [];
+      if (unreachableBy(list, params)) {
+        throw new LispError(`unreachable clause for ${ev.v}`);
+      }
+      list.push({ params, body: form.v.slice(3), paramsForm });
+      onMap.set(ev.v, list);
+      return true;
+    }
+    return false;
+  };
+
+  const newBoot: LispVal[] = [];
+  last = null;
+  for (const form of boot) {
+    const ex = expandVal(form, env, ctx);
+    if (takeExpanded(ex)) continue;
+    newBoot.push(ex);
+  }
+  for (const clauses of fnMap.values()) expandBody(clauses);
+  for (const clauses of onMap.values()) expandBody(clauses);
+
   const handlers: Handler[] = [];
   for (const [event, clauses] of onMap) handlers.push({ event, clauses });
-  const fns: NamedFn[] = [];
-  for (const [name, clauses] of fnMap) fns.push({ name, clauses });
-  return { ok: true, program: { handlers, boot, fns } };
+  const outFns: NamedFn[] = [];
+  for (const [name, clauses] of fnMap) {
+    outFns.push({ name, clauses, nameForm: fnNameForm.get(name) });
+  }
+  const outMacros: NamedFn[] = [];
+  for (const [name, clauses] of macroMap) {
+    outMacros.push({ name, clauses, nameForm: macroNameForm.get(name) });
+  }
+  return { handlers, boot: newBoot, fns: outFns, macros: outMacros };
 }
 
-function isTopFnDef(
+function isTopNamed(
   form: LispVal,
+  kw: "def" | "defm",
 ): form is { k: "list"; v: [LispVal, { k: "sym"; v: string }, LispVal, ...LispVal[]] } {
   return (
     form.k === "list" &&
     form.v[0]?.k === "sym" &&
-    form.v[0].v === "def" &&
+    form.v[0].v === kw &&
     form.v[1]?.k === "sym" &&
     form.v[2]?.k === "list" &&
     form.v.length >= 3
@@ -1244,8 +1400,35 @@ export function parseParams(form: LispVal, ctx: string): Params {
   const pos: Pattern[] = [];
   const keys: { name: string; pat: Pattern }[] = [];
   const seen: string[] = [];
+  let rest: string | undefined;
   for (let i = 0; i < form.v.length; ) {
     const p = form.v[i]!;
+    if (p.k === "comment") {
+      i += 1;
+      continue;
+    }
+    if (p.k === "splice") {
+      if (ctx !== "defm") {
+        throw new LispError("only defm can use @rest");
+      }
+      if (mode === "key") {
+        throw new LispError("do not mix positional and keyword parameters");
+      }
+      if (rest) throw new LispError("only one @rest parameter is allowed");
+      if (p.v.k !== "sym" || !p.v.v || p.v.v.endsWith(":")) {
+        throw new LispError("@rest needs a name");
+      }
+      if (i !== form.v.length - 1 && form.v.slice(i + 1).some((x) => x.k !== "comment")) {
+        throw new LispError("@rest must be last");
+      }
+      mode = "pos";
+      rest = p.v.v;
+      if (seen.includes(rest)) throw new LispError(`duplicate parameter ${rest}`);
+      seen.push(rest);
+      i += 1;
+      continue;
+    }
+    if (rest) throw new LispError("@rest must be last");
     if (isKeySym(p)) {
       if (mode === "pos") {
         throw new LispError("do not mix positional and keyword parameters");
@@ -1256,7 +1439,7 @@ export function parseParams(form: LispVal, ctx: string): Params {
       if (seen.includes(name)) throw new LispError(`duplicate parameter ${name}`);
       seen.push(name);
       const next = form.v[i + 1];
-      if (next && !isKeySym(next)) {
+      if (next && !isKeySym(next) && next.k !== "comment") {
         keys.push({ name, pat: asPattern(next) });
         i += 2;
       } else {
@@ -1273,7 +1456,7 @@ export function parseParams(form: LispVal, ctx: string): Params {
     i += 1;
   }
   if (mode === "key") return { k: "key", pats: keys };
-  return { k: "pos", pats: pos };
+  return { k: "pos", pats: pos, rest };
 }
 
 type CallParts = { pos: LispVal[]; keys: Map<string, LispVal> };
@@ -1308,13 +1491,36 @@ function evalCallRaw(
   env: Env,
   ctx: Ctx,
 ): CallParts {
-  const parts = parseCallRaw(raw);
+  const pos: LispVal[] = [];
   const keys = new Map<string, LispVal>();
-  for (const k of parts.keys) keys.set(k.name, evalVal(k.raw, env, ctx));
-  return {
-    pos: parts.pos.map((a) => evalVal(a, env, ctx)),
-    keys,
-  };
+  let keyed = false;
+  for (let i = 0; i < raw.length; ) {
+    const a = raw[i]!;
+    if (a.k === "comment") {
+      i += 1;
+      continue;
+    }
+    if (a.k === "splice") {
+      if (keyed) throw new LispError("positional argument after key:");
+      pos.push(...asSpliceList(spliceInner(a.v, env, ctx, false), a));
+      i += 1;
+      continue;
+    }
+    if (a.k === "sym" && a.v.endsWith(":") && a.v.length > 1) {
+      keyed = true;
+      const name = a.v.slice(0, -1);
+      const val = raw[i + 1];
+      if (!val) throw new LispError(`missing value for ${a.v}`);
+      if (keys.has(name)) throw new LispError(`duplicate ${a.v}`);
+      keys.set(name, evalVal(val, env, ctx));
+      i += 2;
+      continue;
+    }
+    if (keyed) throw new LispError("positional argument after key:");
+    pos.push(evalVal(a, env, ctx));
+    i += 1;
+  }
+  return { pos, keys };
 }
 
 function clauseKeys(params: Params): string[] {
@@ -1337,7 +1543,12 @@ function patCovers(earlier: Pattern, later: Pattern | undefined): boolean {
 function clauseCovers(earlier: Params, later: Params): boolean {
   if (earlier.k !== later.k) return false;
   if (earlier.k === "pos" && later.k === "pos") {
-    if (earlier.pats.length !== later.pats.length) return false;
+    if (!earlier.rest) {
+      if (later.rest) return false;
+      if (earlier.pats.length !== later.pats.length) return false;
+      return earlier.pats.every((p, i) => patCovers(p, later.pats[i]));
+    }
+    if (later.pats.length < earlier.pats.length) return false;
     return earlier.pats.every((p, i) => patCovers(p, later.pats[i]));
   }
   if (earlier.k === "key" && later.k === "key") {
@@ -1372,6 +1583,10 @@ function walkSlots(
     if (v.v.startsWith("#")) onSlot(v.v, v);
     return;
   }
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    walkSlots(v.v, onSlot);
+    return;
+  }
   if (v.k === "list") {
     if (isFnCall(v)) return;
     for (const x of v.v) walkSlots(x, onSlot);
@@ -1397,6 +1612,7 @@ function maxSlot(args: LispVal[]): number {
 
 function hasNestedFn(args: LispVal[]): boolean {
   const walk = (v: LispVal): boolean => {
+    if (v.k === "quote" || v.k === "unquote" || v.k === "splice") return walk(v.v);
     if (v.k === "list") {
       if (isFnCall(v)) return true;
       return v.v.some(walk);
@@ -1471,6 +1687,14 @@ function bindPat(pat: Pattern, val: LispVal, env: Env): boolean {
 function tryBind(params: Params, call: CallParts, env: Env): boolean {
   if (params.k === "pos") {
     if (call.keys.size) return false;
+    if (params.rest) {
+      if (call.pos.length < params.pats.length) return false;
+      for (let i = 0; i < params.pats.length; i++) {
+        if (!bindPat(params.pats[i]!, call.pos[i]!, env)) return false;
+      }
+      env.vars.set(params.rest, list(call.pos.slice(params.pats.length), true));
+      return true;
+    }
     if (call.pos.length !== params.pats.length) return false;
     for (let i = 0; i < params.pats.length; i++) {
       if (!bindPat(params.pats[i]!, call.pos[i]!, env)) return false;
@@ -1513,20 +1737,277 @@ export function evalForms(
   forms: LispVal[],
   env: Env,
   host: Host,
+  macros: Map<string, Clause[]> = new Map(),
 ): LispVal {
-  const ctx = { budget: BUDGET, host };
+  const ctx: Ctx = { budget: BUDGET, host, macros, macroEnv: env };
   let last: LispVal = nil();
   for (const f of forms) last = evalVal(f, env, ctx);
   return last;
 }
 
-type Ctx = { budget: number; host: Host };
+type Ctx = {
+  budget: number;
+  host: Host;
+  macros: Map<string, Clause[]>;
+  macroEnv: Env;
+};
+
+export function toMacroTable(macros: NamedFn[]): Map<string, Clause[]> {
+  const m = new Map<string, Clause[]>();
+  for (const x of macros) m.set(x.name, x.clauses);
+  return m;
+}
+
+function dummyHost(): Host {
+  return {
+    say: () => {},
+    getVar: () => nil(),
+    setVar: () => {},
+    setAttr: () => false,
+    getAttr: () => undefined,
+    setWall: () => false,
+    getWall: () => undefined,
+    spawn: () => null,
+    remove: () => false,
+    teleport: () => false,
+    win: () => {},
+    lose: () => {},
+    after: () => {},
+  };
+}
+
+function collectImported(v: LispVal, into: Set<LispVal>) {
+  if (into.has(v)) return;
+  into.add(v);
+  if (v.k === "list") {
+    for (const x of v.v) collectImported(x, into);
+    return;
+  }
+  if (v.k === "map") {
+    for (const x of v.v.values()) collectImported(x, into);
+    return;
+  }
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    collectImported(v.v, into);
+  }
+}
+
+let hygSeq = 0;
+function freshName(name: string): string {
+  hygSeq += 1;
+  return `${name}#m${hygSeq}`;
+}
+
+function hygienic(
+  v: LispVal,
+  imported: Set<LispVal>,
+  subst: Map<string, string>,
+): LispVal {
+  if (imported.has(v)) return v;
+  if (v.k === "sym") {
+    const n = subst.get(v.v);
+    return n ? { ...v, v: n } : v;
+  }
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") {
+    return { ...v, v: hygienic(v.v, imported, subst) };
+  }
+  if (v.k === "map") {
+    const m = new Map<string, LispVal>();
+    for (const [k, val] of v.v) m.set(k, hygienic(val, imported, subst));
+    return { ...v, v: m };
+  }
+  if (v.k !== "list") return v;
+  const head = v.v[0];
+  const name = head?.k === "sym" ? head.v : "";
+  if ((name === "let" || name === "let!") && v.v.length >= 1) {
+    const exported = name === "let!";
+    const binds = v.v[1];
+    let next = subst;
+    let newBinds = binds;
+    if (binds && !imported.has(binds) && binds.k === "map" && !exported) {
+      next = new Map(subst);
+      const m = new Map<string, LispVal>();
+      for (const [k, val] of binds.v) {
+        const nk = freshName(k);
+        next.set(k, nk);
+        m.set(nk, hygienic(val, imported, subst));
+      }
+      newBinds = { ...binds, v: m };
+    } else if (binds) {
+      newBinds = hygienic(binds, imported, subst);
+    }
+    const body = v.v.slice(2).map((x) => hygienic(x, imported, next));
+    const newHead = head && head.k === "sym" ? { ...head, v: "let" } : sym("let");
+    return { ...v, v: [newHead, ...(newBinds ? [newBinds] : []), ...body] };
+  }
+  if (name === "fn" || name === "def" || name === "defm" || name === "on") {
+    return hygienicFnLike(v, imported, subst, name);
+  }
+  return { ...v, v: v.v.map((x) => hygienic(x, imported, subst)) };
+}
+
+function renameParamForm(
+  form: LispVal,
+  imported: Set<LispVal>,
+  subst: Map<string, string>,
+): { form: LispVal; subst: Map<string, string> } {
+  if (imported.has(form) || form.k !== "list") {
+    return { form: hygienic(form, imported, subst), subst };
+  }
+  const next = new Map(subst);
+  const out: LispVal[] = [];
+  for (const p of form.v) {
+    if (p.k === "splice" && p.v.k === "sym") {
+      const nk = freshName(p.v.v);
+      next.set(p.v.v, nk);
+      out.push({ ...p, v: { ...p.v, v: nk } });
+      continue;
+    }
+    if (p.k === "sym" && !p.v.endsWith(":")) {
+      const nk = freshName(p.v);
+      next.set(p.v, nk);
+      out.push({ ...p, v: nk });
+      continue;
+    }
+    if (isKeySym(p)) {
+      const raw = p.v.slice(0, -1);
+      const nk = freshName(raw);
+      next.set(raw, nk);
+      out.push({ ...p, v: `${nk}:` });
+      continue;
+    }
+    out.push(hygienic(p, imported, subst));
+  }
+  return { form: { ...form, v: out }, subst: next };
+}
+
+function hygienicFnLike(
+  v: Extract<LispVal, { k: "list" }>,
+  imported: Set<LispVal>,
+  subst: Map<string, string>,
+  name: string,
+): LispVal {
+  const xs = v.v;
+  if (name === "fn") {
+    try {
+      const parsed = parseFn(xs.slice(1));
+      const rebuilt: LispVal[] = [xs[0]!];
+      for (const c of parsed.clauses) {
+        if (c.paramsForm) {
+          const r = renameParamForm(c.paramsForm, imported, subst);
+          rebuilt.push(r.form);
+          rebuilt.push(...c.body.map((b) => hygienic(b, imported, r.subst)));
+        } else {
+          rebuilt.push(...c.body.map((b) => hygienic(b, imported, subst)));
+        }
+        rebuilt.push(sym("fn"));
+      }
+      const last = rebuilt[rebuilt.length - 1];
+      if (last?.k === "sym" && last.v === "fn") {
+        rebuilt.pop();
+      }
+      return { ...v, v: rebuilt };
+    } catch {
+      return { ...v, v: xs.map((x) => hygienic(x, imported, subst)) };
+    }
+  }
+  const nm = xs[1];
+  const params = xs[2];
+  const head = xs[0] ? hygienic(xs[0], imported, subst) : xs[0];
+  const keptName = nm;
+  if (!params) {
+    return { ...v, v: xs.map((x) => hygienic(x, imported, subst)) };
+  }
+  const r = renameParamForm(params, imported, subst);
+  const body = xs.slice(3).map((b) => hygienic(b, imported, r.subst));
+  return { ...v, v: [head!, keptName!, r.form, ...body] };
+}
+
+function applyMacro(
+  name: string,
+  clauses: Clause[],
+  raw: LispVal[],
+  ctx: Ctx,
+  call: LispVal,
+): LispVal {
+  let parts: { pos: LispVal[]; keys: Map<string, LispVal> };
+  try {
+    const parsed = parseCallRaw(raw);
+    parts = {
+      pos: parsed.pos,
+      keys: new Map(parsed.keys.map((k) => [k.name, k.raw])),
+    };
+  } catch (e) {
+    if (e instanceof LispError && e.start == null && call.span) {
+      e.start = call.span.start;
+      e.end = call.span.end;
+    }
+    throw e;
+  }
+  const allPos = clauses.every((c) => c.params.k === "pos");
+  const allKey = clauses.every((c) => c.params.k === "key");
+  if (allPos && parts.keys.size) {
+    throw new LispError("this macro does not take keyword arguments", call.span?.start, call.span?.end);
+  }
+  if (allKey && parts.pos.length) {
+    throw new LispError("this macro needs key: arguments", call.span?.start, call.span?.end);
+  }
+  for (const clause of clauses) {
+    const child = makeEnv(ctx.macroEnv);
+    if (!tryBind(clause.params, parts, child)) continue;
+    let last: LispVal = nil();
+    for (const b of clause.body) last = evalVal(b, child, ctx);
+    const imported = new Set<LispVal>();
+    for (const a of raw) collectImported(a, imported);
+    hygSeq = 0;
+    const out = hygienic(last, imported, new Map());
+    if (out.span == null && call.span) out.span = call.span;
+    return out;
+  }
+  throw new LispError(`no matching clause for ${name}`, call.span?.start, call.span?.end);
+}
+
+function expandVal(v: LispVal, env: Env, ctx: Ctx): LispVal {
+  if (--ctx.budget <= 0) throw new LispError("script ran too long");
+  if (v.k === "comment" || v.k === "num" || v.k === "str" || v.k === "bool" || v.k === "nil" || v.k === "fn") {
+    return v;
+  }
+  if (v.k === "quote" || v.k === "unquote" || v.k === "splice") return v;
+  if (v.k === "sym") return v;
+  if (v.k === "map") {
+    const out = new Map<string, LispVal>();
+    for (const [k, val] of v.v) out.set(k, expandVal(val, env, ctx));
+    return { ...v, v: out };
+  }
+  if (v.k !== "list") return v;
+  if (v.vec) {
+    return { ...v, v: v.v.map((x) => expandVal(x, env, ctx)) };
+  }
+  const xs = v.v.filter((x) => x.k !== "comment");
+  if (!xs.length) return v;
+  const head = xs[0]!;
+  if (head.k === "sym") {
+    const clauses = ctx.macros.get(head.v);
+    if (clauses) {
+      const expanded = applyMacro(head.v, clauses, xs.slice(1), ctx, v);
+      return expandVal(expanded, env, ctx);
+    }
+  }
+  return { ...v, v: v.v.map((x) => expandVal(x, env, ctx)) };
+}
 
 function evalVal(v: LispVal, env: Env, ctx: Ctx): LispVal {
   if (--ctx.budget <= 0) throw new LispError("script ran too long");
   if (v.k === "comment") return nil();
   if (v.k === "num" || v.k === "str" || v.k === "bool" || v.k === "nil" || v.k === "fn") {
     return v;
+  }
+  if (v.k === "quote") return evalQuote(v.v, env, ctx, 1);
+  if (v.k === "unquote") {
+    throw new LispError("comma not inside quote", v.span?.start, v.span?.end);
+  }
+  if (v.k === "splice") {
+    throw new LispError("@ needs a list to insert into", v.span?.start, v.span?.end);
   }
   if (v.k === "sym") {
     if (v.v === "true") return bool(true);
@@ -1543,24 +2024,102 @@ function evalVal(v: LispVal, env: Env, ctx: Ctx): LispVal {
   }
   if (v.k !== "list" || v.v.length === 0) return v;
   if (v.vec) {
-    const items = v.v.filter((x) => x.k !== "comment");
-    return list(
-      items.map((x) => evalVal(x, env, ctx)),
-      true,
-    );
+    return list(evalSpread(v.v, env, ctx, false), true);
   }
   const xs = v.v.filter((x) => x.k !== "comment");
   if (!xs.length) return nil();
   const head = xs[0]!;
-  if (head.k === "sym") {
+  if (head.k !== "splice" && head.k === "sym") {
     const sf = special(head.v, xs.slice(1), env, ctx);
     if (sf !== undefined) return sf;
+    const mac = ctx.macros.get(head.v);
+    if (mac) {
+      return evalVal(expandVal(v, env, ctx), env, ctx);
+    }
     if (BUILTINS.has(head.v) && head.v !== "true" && head.v !== "false" && head.v !== "nil") {
       return callBuiltin(head.v, evalCallRaw(xs.slice(1), env, ctx), ctx);
     }
   }
+  if (head.k === "splice") {
+    const parts = evalSpread(xs, env, ctx, false);
+    if (!parts.length) return nil();
+    return applyFn(parts[0]!, { pos: parts.slice(1), keys: new Map() }, env, ctx);
+  }
   const fn = evalVal(head, env, ctx);
   return applyFn(fn, evalCallRaw(xs.slice(1), env, ctx), env, ctx);
+}
+
+function spliceInner(v: LispVal, env: Env, ctx: Ctx, inQuote: boolean): LispVal {
+  if (v.k === "unquote") {
+    if (!inQuote) {
+      throw new LispError("comma not inside quote", v.span?.start, v.span?.end);
+    }
+    return evalVal(v.v, env, ctx);
+  }
+  return evalVal(v, env, ctx);
+}
+
+function asSpliceList(v: LispVal, at?: LispVal): LispVal[] {
+  if (v.k !== "list") {
+    throw new LispError("@ needs a list", at?.span?.start, at?.span?.end);
+  }
+  return v.v.filter((x) => x.k !== "comment");
+}
+
+function evalSpread(
+  items: LispVal[],
+  env: Env,
+  ctx: Ctx,
+  inQuote: boolean,
+): LispVal[] {
+  const out: LispVal[] = [];
+  for (const a of items) {
+    if (a.k === "comment") continue;
+    if (a.k === "splice") {
+      out.push(...asSpliceList(spliceInner(a.v, env, ctx, inQuote), a));
+    } else {
+      out.push(evalVal(a, env, ctx));
+    }
+  }
+  return out;
+}
+
+function evalQuote(v: LispVal, env: Env, ctx: Ctx, depth: number): LispVal {
+  if (v.k === "unquote") {
+    if (depth === 1) return evalVal(v.v, env, ctx);
+    return { k: "unquote", v: evalQuote(v.v, env, ctx, depth - 1) };
+  }
+  if (v.k === "quote") {
+    return { k: "quote", v: evalQuote(v.v, env, ctx, depth + 1) };
+  }
+  if (v.k === "splice") {
+    if (depth !== 1) {
+      return { k: "splice", v: evalQuote(v.v, env, ctx, depth) };
+    }
+    const xs = asSpliceList(spliceInner(v.v, env, ctx, true), v);
+    return list(xs);
+  }
+  if (v.k === "list") {
+    const out: LispVal[] = [];
+    for (const item of v.v) {
+      if (item.k === "comment") {
+        out.push(item);
+        continue;
+      }
+      if (item.k === "splice" && depth === 1) {
+        out.push(...asSpliceList(spliceInner(item.v, env, ctx, true), item));
+      } else {
+        out.push(evalQuote(item, env, ctx, depth));
+      }
+    }
+    return list(out, v.vec);
+  }
+  if (v.k === "map") {
+    const out = new Map<string, LispVal>();
+    for (const [k, val] of v.v) out.set(k, evalQuote(val, env, ctx, depth));
+    return { k: "map", v: out };
+  }
+  return v;
 }
 
 function special(
@@ -1570,8 +2129,6 @@ function special(
   ctx: Ctx,
 ): LispVal | undefined {
   switch (name) {
-    case "quote":
-      return args[0] ?? nil();
     case "if": {
       const clauses = parseIfArgs(args);
       for (const c of clauses) {
@@ -1611,13 +2168,25 @@ function special(
     case "fn":
       return makeFn(args, env);
     case "let":
+    case "let!":
       return evalLet(args, env, ctx);
+    case "defm":
+      throw new LispError("(defm ...) only works at the top of a script");
     case "pipe":
       return evalPipe(args, env, ctx);
+    case "eval": {
+      if (args.length !== 1) throw new LispError("eval needs one form");
+      return evalVal(evalVal(args[0]!, env, ctx), env, ctx);
+    }
     case "after": {
       const sec = asNum(evalVal(args[0] ?? num(0), env, ctx), "after");
       const body = args.slice(1);
-      const later = { budget: BUDGET, host: ctx.host };
+      const later: Ctx = {
+        budget: BUDGET,
+        host: ctx.host,
+        macros: ctx.macros,
+        macroEnv: ctx.macroEnv,
+      };
       ctx.host.after(sec, () => {
         try {
           for (const b of body) evalVal(b, env, later);
@@ -1671,7 +2240,7 @@ function evalLet(args: LispVal[], env: Env, ctx: Ctx): LispVal {
 }
 
 function quotedVal(v: LispVal): LispVal {
-  return list([sym("quote"), v]);
+  return { k: "quote", v };
 }
 
 function pipeStepForm(step: LispVal, cur: LispVal): LispVal {
@@ -2188,6 +2757,9 @@ function eq(a: LispVal, b: LispVal): boolean {
   }
   if (a.k === "nil") return true;
   if (a.k === "fn") return a === b;
+  if (a.k === "quote" || a.k === "unquote" || a.k === "splice") {
+    return b.k === a.k && eq(a.v, (b as { v: LispVal }).v);
+  }
   if (a.k === "list") {
     if (b.k !== "list" || a.v.length !== b.v.length) return false;
     return a.v.every((x, i) => eq(x, b.v[i]!));
@@ -2241,7 +2813,7 @@ export function fireHandlers(
       const payloadEnv = makeEnv(env);
       if (!tryBind(clause.params, call, payloadEnv)) continue;
       try {
-        evalForms(clause.body, payloadEnv, host);
+        evalForms(clause.body, payloadEnv, host, toMacroTable(program.macros));
       } catch (e) {
         host.say(e instanceof Error ? e.message : "Script error");
       }
