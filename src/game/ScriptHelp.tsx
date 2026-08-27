@@ -2,7 +2,7 @@ import { useState } from "react";
 import { formatLisp } from "./lisp";
 
 const SAMPLE_SRC = `; Use the same names as the editor. announce is a small helper.
-(def announce (msg)
+(def (announce msg)
   (say (str ">> " msg)))
 
 ; Lock the armory. Tell the player to find the key.
@@ -232,15 +232,30 @@ function Types() {
       <Block>
         <H>Boolean</H>
         <p>
-          <Code>true</Code> and <Code>false</Code> are boolean values. A
-          boolean is a yes-or-no value.
+          <Code>true</Code> and <Code>false</Code> are boolean values. They
+          are also symbols. <Code>'true</Code> is the same value as{" "}
+          <Code>true</Code>.
         </p>
       </Block>
       <Block>
         <H>nil</H>
         <p>
           <Code>nil</Code> is the empty value. The script reads{" "}
-          <Code>nil</Code> as false.
+          <Code>nil</Code> as false. <Code>nil</Code> is a symbol. It is
+          not a boolean.
+        </p>
+      </Block>
+      <Block>
+        <H>Symbol</H>
+        <p>
+          <Code>'hits</Code> is a symbol. A symbol is a name as data, not
+          a lookup. <Code>"hits"</Code> is a string. Those two are not
+          equal.
+        </p>
+        <p>
+          <Code>`foo bar`</Code> is a symbol whose name has a space.{" "}
+          <Code>(symbol "hits")</Code> makes <Code>'hits</Code> from a
+          string.
         </p>
       </Block>
       <Block>
@@ -363,7 +378,8 @@ function Syntax() {
           Any other word is a variable name. A name holds letters and digits. A
           name also holds <Code>-</Code>, <Code>?</Code>, and other marks.{" "}
           <Code>def</Code>, <Code>let</Code>, a function parameter, or an event
-          parameter binds the word.
+          parameter binds the word. A name that is not a bare token is written
+          with backticks: <Code>`foo bar`</Code>.
         </p>
       </Block>
       <Block>
@@ -524,9 +540,9 @@ else
       <Block>
         <H>def</H>
         <p>
-          <Code>(def announce (msg) ...)</Code> makes a function. The form
-          matches <Code>on</Code>. The parts are the name, a parameter list,
-          and the body. The body can be empty. To store a value, use{" "}
+          <Code>(def (announce msg) ...)</Code> makes a function. The first
+          list is the call with holes: the name, then the parameters. The rest
+          is the body. The body can be empty. To store a value, use{" "}
           <Code>set-prop</Code>.
         </p>
         <p>
@@ -541,10 +557,10 @@ else
         </p>
         <p>Example:</p>
         <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
-          {`(def example ("test")
+          {`(def (example "test")
   (say "A test."))
 
-(def example (value)
+(def (example value)
   (say (str "This is a " value ".")))`}
         </pre>
         <p>
@@ -555,14 +571,14 @@ else
       <Block>
         <H>defm</H>
         <p>
-          <Code>(defm unless (test @body) ...)</Code> makes a macro. The
+          <Code>(defm (unless test @body) ...)</Code> makes a macro. The
           form matches <Code>def</Code>. The body runs while the script
           loads. The arguments are the forms as written, not their values.
           The body must return a form. That form then runs in place of the
           call.
         </p>
         <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
-          {`(defm unless (test @body)
+          {`(defm (unless test @body)
   '(if not ,test @body))
 
 (unless (get-prop "freed")
@@ -583,7 +599,7 @@ else
           spliced code:
         </p>
         <pre className="overflow-x-auto rounded-md border border-border bg-bg p-3 font-mono text-[11px] leading-5 text-fg">
-          {`(defm aif (test @body)
+          {`(defm (aif test @body)
   '(let! [it: ,test]
      (if it @body)))`}
         </pre>
@@ -599,7 +615,7 @@ else
           value are a pair. The order of pairs does not matter.
         </p>
         <p>
-          <Code>(def example (an-arg: other:) ...)</Code> makes a function
+          <Code>(def (example an-arg: other:) ...)</Code> makes a function
           that takes keys. The body uses <Code>an-arg</Code> and{" "}
           <Code>other</Code> with no colon.
         </p>
@@ -609,7 +625,7 @@ else
           allowed keys are the keys from every clause.
         </p>
         <p>
-          <Code>(def example (value: "test") ...)</Code> matches only when{" "}
+          <Code>(def (example value: "test") ...)</Code> matches only when{" "}
           <Code>value:</Code> is <Code>"test"</Code>. A key that a clause
           does not list is not checked. To match <Code>nil</Code>, write{" "}
           <Code>value: nil</Code>.
@@ -667,10 +683,11 @@ else
       <Block>
         <H>' , and @</H>
         <p>
-          <Code>'x</Code> returns <Code>x</Code> with no evaluation.{" "}
-          <Code>,x</Code> inside a quote evaluates <Code>x</Code>.{" "}
+          <Code>'x</Code> returns the symbol <Code>x</Code> with no
+          lookup. <Code>,x</Code> inside a quote evaluates <Code>x</Code>.{" "}
           <Code>@xs</Code> inserts the items of a list into the list
-          around it.
+          around it. <Code>'(+ 1 2)</Code> is a list whose first item is
+          the symbol <Code>+</Code>.
         </p>
       </Block>
       <Block>
@@ -767,6 +784,11 @@ function Builtins() {
         <ul className="list-disc space-y-1 pl-5">
           <li>
             <Code>(str a b ...)</Code> joins values into one string.
+          </li>
+          <li>
+            <Code>(symbol x)</Code> makes a symbol from a string.{" "}
+            <Code>(symbol "hits")</Code> is <Code>'hits</Code>. A symbol
+            argument stays a symbol.
           </li>
           <li>
             <Code>(len x)</Code> counts characters in a string, items in a
@@ -875,9 +897,10 @@ function Builtins() {
         </p>
         <p>
           <Code>list?</Code>, <Code>map?</Code>, <Code>num?</Code>,{" "}
-          <Code>str?</Code>,{" "}
+          <Code>str?</Code>, <Code>symbol?</Code>,{" "}
           <Code>bool?</Code>, and <Code>nil?</Code> test the type of one
-          value.
+          value. <Code>(symbol? true)</Code> is true.{" "}
+          <Code>(bool? nil)</Code> is false.
         </p>
       </Block>
     </div>

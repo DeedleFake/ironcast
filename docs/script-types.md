@@ -92,7 +92,35 @@ Exact text is a subtype of `string()`. `unknown_string()` is a subtype of `strin
 unknown_string() ∩ string() = unknown_string()
 ```
 
-`(str "a" "b")` has type `"ab"`. If any argument is not exact text, the result is `unknown_string()`.
+`(str "a" "b")` has type `"ab"`. If any argument is not exact text, the result is `unknown_string()`. `(str '+)` is `"+"`. `(str true)` is `"true"`.
+
+### Symbols
+
+A symbol is a name as data. `'hits` is a symbol. `` `foo bar` `` is a symbol whose name has a space.
+
+| Type | Values |
+| --- | --- |
+| `'+` | Only that exact symbol |
+| `unknown_symbol()` | A symbol whose name is not known |
+| `symbol()` | Every symbol: every exact symbol, `unknown_symbol()`, `true`, `false`, and `nil` |
+
+Exact symbols print as `'hits`. A name that is not a bare token prints as `` '`foo bar` ``.
+
+`'+ ⊆ symbol()`. `'+ ∩ 'once` is `none()`. A symbol is **not** a string. `"hits" ∩ 'hits` is `none()`. `id()` is strings, not symbols.
+
+`(symbol "hits")` is `'hits`. `(symbol (str "a" n))` is `unknown_symbol()`. `(symbol true)` is `true`.
+
+`true`, `false`, and `nil` are interned symbols.
+
+| | |
+| --- | --- |
+| `true ⊆ bool()` | `true ⊆ symbol()` |
+| `false ⊆ bool()` | `false ⊆ symbol()` |
+| `nil` is not `bool()` | `nil ⊆ symbol()` |
+
+`bool() ∩ symbol()` is `true or false`. `'true` and `true` are the same value.
+
+At run time each distinct name is one object. `quote` of a symbol, `(symbol …)`, and `eval` of a symbol all return that interned value. Source trees keep their own spans.
 
 ### `id()`
 
@@ -284,6 +312,8 @@ If no `set-prop` writes `"hits"`, `(get-prop "hits")` has type `nil`, not `dynam
 | `false` | `false` |
 | `nil` | `nil` |
 | `"text"` | `"text"` |
+| `'hits` | `'hits` |
+| `` '`foo bar` `` | `` '`foo bar` `` |
 | `[]` | `empty_list()` |
 | `[a b c]` | `[type of a, type of b, type of c]` |
 | `[:]` | `empty_map()` |
@@ -330,19 +360,19 @@ Keywords are special forms. They are not functions. They do not take `k:` argume
 ### `def`
 
 ```
-(def name (params…) body…)
+(def (name args…) body…)
 ```
 
-Allowed only at the top of the script. Defines a function `name`. Several `def` forms with the same `name` must sit next to each other. They are clauses of one function. The first matching clause at run time wins.
+Allowed only at the top of the script. Defines a function `name`. The first list is the call with holes: the name, then the parameters. Several `def` forms with the same `name` must sit next to each other. They are clauses of one function. The first matching clause at run time wins.
 
-`params` is either all positional (`n`, `0`, `"x"`) or all keyword (`target:`, `target: "server"`). Mixing is an error. `[]` is not a parameter list.
+The parameters after the name are either all positional (`n`, `0`, `"x"`) or all keyword (`target:`, `target: "server"`). Mixing is an error. `[]` is not a parameter list.
 
 | Kind of parameter | Argument type of that clause |
 | --- | --- |
 | Bind, such as `n` or `target:` | Starts as `dynamic(any())`. The body is typed once to collect uses, then those names are updated. If the body never constrains a name, it stays `dynamic(any())`. If the body uses it as a number (for example `(- n 1)`), it becomes `number()`. If the body uses it as a place (for example `(set-wall place …)` or `(spawn-fill target …)`), it becomes that place type. A name bound by `let` is updated the same way after the `let` body is typed. Every use of that name, including earlier ones, then has that type. |
 | Literal, such as `0` or `"server"` | The type of that literal. `0` is `number()`. `"server"` is `"server"`. The body does not change this. |
 
-So `(0)` and `(n)` do **not** always have the same argument type. They have the same type when `n` is inferred to `number()` and the literal `0` is typed as `number()`. If `n` is unused, the bind clause accepts `dynamic(any())` and the `(0)` clause still requires `number()`. A use only inside one branch of `if` does not constrain the parameter for the whole clause.
+So `(name 0)` and `(name n)` do **not** always have the same argument type. They have the same type when `n` is inferred to `number()` and the literal `0` is typed as `number()`. If `n` is unused, the bind clause accepts `dynamic(any())` and the `(name 0)` clause still requires `number()`. A use only inside one branch of `if` does not constrain the parameter for the whole clause.
 
 When two clauses print the same arrow, the type of the function shows that arrow once.
 
@@ -353,7 +383,7 @@ A `def` that is not at the top of the script is an error.
 ### `defm`
 
 ```
-(defm name (params…) body…)
+(defm (name args…) body…)
 ```
 
 Allowed only at the top of the script. Same clause rules as `def`. `name` cannot also be a `def`, a keyword, or a built-in.
@@ -499,7 +529,7 @@ Each argument is typed. The result is `dynamic(type of the last argument or fals
 @form
 ```
 
-`'` quotes. The form is data. It is not called. A quoted word has type `unknown_string()`. A quoted number has type `number()`.
+`'` quotes. The form is data. It is not called. A quoted word has type `'that-word` (a symbol). `'true` has type `true`. A quoted number has type `number()`. `'(+ 1 2)` has type `['+ number() number()]`.
 
 `,` is only valid inside `'`. It evaluates that form and inserts the value.
 
@@ -634,6 +664,9 @@ A bind passed to these is constrained toward `number()`.
 | Call | Arguments | Result |
 | --- | --- | --- |
 | `(str …)` | any | Concatenated exact text if every argument is exact text; otherwise `unknown_string()` |
+| `(symbol x)` | string, symbol, `true`, `false`, or `nil` | `'hits` from `"hits"`; `true` from `"true"` or `true`; `unknown_symbol()` from `unknown_string()` |
+
+`(str '+)` is `"+"`. `(str true)` is `"true"`.
 
 ### Length
 
@@ -740,6 +773,7 @@ Each takes one argument of any type. The result is `bool()`.
 | `(map? x)` | a map |
 | `(num? x)` | a number |
 | `(str? x)` | a string |
+| `(symbol? x)` | a symbol, including `true`, `false`, and `nil` |
 | `(bool? x)` | `true` or `false` |
 | `(nil? x)` | `nil` |
 

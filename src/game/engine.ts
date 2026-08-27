@@ -40,6 +40,7 @@ import {
   num,
   str,
   bool,
+  isNil,
   mapFrom,
   LispError,
   type Env,
@@ -403,7 +404,7 @@ function wallFields(
 }
 
 function sameWallField(a: LispVal, b: LispVal): boolean {
-  if (a.k === "nil" && b.k === "nil") return true;
+  if (isNil(a) && isNil(b)) return true;
   if (a.k === "str" && b.k === "str") return a.v === b.v;
   return false;
 }

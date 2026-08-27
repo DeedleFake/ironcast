@@ -262,11 +262,11 @@ export function createNightVaultLevel(): GameLevel {
   walls[4]![10] = 5;
   walls[8]![10] = 5;
 
-  const script = prettyScript(`(def announce (msg)
+  const script = prettyScript(`(def (announce msg)
   (say (str ">> " msg)))
 
 ; Run the body the first time only.
-(defm once (flag @body)
+(defm (once flag @body)
   '(if not (get-prop ,flag)
      (set-prop ,flag true)
      @body))
@@ -465,12 +465,12 @@ export function createDepthsLevel(): GameLevel {
       { x: 2, y: 21, w: 3, h: 1, id: "guard-spawn" },
     ],
     marks: [{ x: 9, y: 19, id: "server" }],
-    script: prettyScript(`(def explode (target)
+    script: prettyScript(`(def (explode target)
   (flash target
          (spawn-fill target "pickup"
                [color: "#ff7800" shape: "explosion"])))
 
-(def flash (place ids)
+(def (flash place ids)
   (let (merge (get-wall place)
               [explosion: ids])
     (set-wall place [type: "empty"
@@ -480,8 +480,8 @@ export function createDepthsLevel(): GameLevel {
       (set-wall place [ceiling: ceiling floor: floor])
       (remove explosion))))
 
-(def teleport-guard (0))
-(def teleport-guard (n)
+(def (teleport-guard 0))
+(def (teleport-guard n)
   (after 0.5
     (teleport "guard" (str "guard-spawn-" n))
     (teleport-guard (- n 1))))

@@ -12,6 +12,8 @@ import {
   parseIfArgs,
   parseLisp,
   parseParams,
+  asDefForm,
+  formatSymName,
 } from "./lisp";
 import {
   type EntityType,
@@ -46,6 +48,8 @@ export type Type =
   | { k: "num" }
   | { k: "str"; v?: string }
   | { k: "ustr" }
+  | { k: "sym"; v?: string }
+  | { k: "usym" }
   | { k: "empty_list" }
   | { k: "empty_map" }
   | { k: "list"; el: Type }
@@ -138,11 +142,20 @@ const tTrue: Type = { k: "bool", v: true };
 const tFalse: Type = { k: "bool", v: false };
 const tStr: Type = { k: "str" };
 const tUStr: Type = { k: "ustr" };
+const tSym: Type = { k: "sym" };
+const tUSym: Type = { k: "usym" };
 const tEmptyList: Type = { k: "empty_list" };
 const tEmptyMap: Type = { k: "empty_map" };
 
 function tLit(s: string): Type {
   return { k: "str", v: s };
+}
+
+function tSymLit(s: string): Type {
+  if (s === "true") return tTrue;
+  if (s === "false") return tFalse;
+  if (s === "nil") return tNil;
+  return { k: "sym", v: s };
 }
 
 function tDyn(t: Type): Type {
@@ -199,8 +212,9 @@ function collectAliases(v: LispVal, into: Map<string, string>) {
   }
   if (v.k === "map") {
     for (const [k, val] of v.v) {
-      if (val.k === "sym") into.set(k, val.v);
-      else collectAliases(val, into);
+      if (val.k === "sym" && val.v !== "true" && val.v !== "false" && val.v !== "nil") {
+        into.set(k, val.v);
+      } else collectAliases(val, into);
     }
     return;
   }
@@ -233,6 +247,10 @@ export function printType(t: Type): string {
       return t.v === undefined ? "string()" : JSON.stringify(t.v);
     case "ustr":
       return "unknown_string()";
+    case "sym":
+      return t.v === undefined ? "symbol()" : "'" + formatSymName(t.v);
+    case "usym":
+      return "unknown_symbol()";
     case "empty_list":
       return "empty_list()";
     case "empty_map":
@@ -301,6 +319,26 @@ function intersect(a: Type, b: Type): Type {
     if (b.v === undefined) return a;
     return a.v === b.v ? a : tNone;
   }
+  if ((a.k === "bool" && a.v === true) || (a.k === "sym" && a.v === "true")) {
+    if (b.k === "bool" && (b.v === true || b.v === undefined)) return tTrue;
+    if (b.k === "sym" && (b.v === "true" || b.v === undefined)) return tTrue;
+  }
+  if ((b.k === "bool" && b.v === true) || (b.k === "sym" && b.v === "true")) {
+    if (a.k === "bool" && (a.v === true || a.v === undefined)) return tTrue;
+    if (a.k === "sym" && (a.v === "true" || a.v === undefined)) return tTrue;
+  }
+  if ((a.k === "bool" && a.v === false) || (a.k === "sym" && a.v === "false")) {
+    if (b.k === "bool" && (b.v === false || b.v === undefined)) return tFalse;
+    if (b.k === "sym" && (b.v === "false" || b.v === undefined)) return tFalse;
+  }
+  if ((b.k === "bool" && b.v === false) || (b.k === "sym" && b.v === "false")) {
+    if (a.k === "bool" && (a.v === false || a.v === undefined)) return tFalse;
+    if (a.k === "sym" && (a.v === "false" || a.v === undefined)) return tFalse;
+  }
+  if (a.k === "nil" && b.k === "sym" && (b.v === "nil" || b.v === undefined)) return tNil;
+  if (b.k === "nil" && a.k === "sym" && (a.v === "nil" || a.v === undefined)) return tNil;
+  if (a.k === "bool" && a.v === undefined && b.k === "sym" && b.v === undefined) return tBool;
+  if (b.k === "bool" && b.v === undefined && a.k === "sym" && a.v === undefined) return tBool;
   if (a.k === "ustr" && b.k === "ustr") return tUStr;
   if (a.k === "str" && b.k === "str") {
     if (a.v === undefined) return b;
@@ -309,6 +347,14 @@ function intersect(a: Type, b: Type): Type {
   }
   if (a.k === "ustr" && b.k === "str" && b.v === undefined) return tUStr;
   if (b.k === "ustr" && a.k === "str" && a.v === undefined) return tUStr;
+  if (a.k === "usym" && b.k === "usym") return tUSym;
+  if (a.k === "sym" && b.k === "sym") {
+    if (a.v === undefined) return b;
+    if (b.v === undefined) return a;
+    return a.v === b.v ? a : tNone;
+  }
+  if (a.k === "usym" && b.k === "sym" && b.v === undefined) return tUSym;
+  if (b.k === "usym" && a.k === "sym" && a.v === undefined) return tUSym;
   if (a.k === "empty_list") {
     if (b.k === "empty_list" || b.k === "list") return tEmptyList;
     return tNone;
@@ -501,19 +547,12 @@ function spanOf(v: LispVal | undefined): { start: number; end: number } {
 
 function kindOf(v: LispVal): Type {
   switch (v.k) {
-    case "nil":
-      return tNil;
     case "num":
       return tNum;
-    case "bool":
-      return v.v ? tTrue : tFalse;
     case "str":
       return tLit(v.v);
     case "sym":
-      if (v.v === "true") return tTrue;
-      if (v.v === "false") return tFalse;
-      if (v.v === "nil") return tNil;
-      return tUStr;
+      return tSymLit(v.v);
     case "list":
       if (v.vec) {
         const items = v.v.filter((x) => x.k !== "comment").map(kindOf);
@@ -661,16 +700,7 @@ class Checker {
     try {
       const t = this.infer(v, env);
       if (v.k === "comment") return t;
-      const name =
-        v.k === "sym"
-          ? v.v
-          : v.k === "bool"
-            ? v.v
-              ? "true"
-              : "false"
-            : v.k === "nil"
-              ? "nil"
-              : undefined;
+      const name = v.k === "sym" ? v.v : undefined;
       this.note(v, t, name);
       return t;
     } finally {
@@ -681,8 +711,6 @@ class Checker {
   infer(v: LispVal, env: Env): Type {
     if (v.k === "comment") return tNil;
     if (v.k === "num") return tNum;
-    if (v.k === "bool") return v.v ? tTrue : tFalse;
-    if (v.k === "nil") return tNil;
     if (v.k === "str") return tLit(v.v);
     if (v.k === "fn") return { k: "fn", arrows: [] };
     if (v.k === "quote") return this.typeQuote(v.v, env, 1);
@@ -769,7 +797,7 @@ class Checker {
         return tDyn(tOr([last, tFalse, tNil]));
       }
       case "not":
-        this.typeForm(args[0] ?? { k: "nil" }, env);
+        this.typeForm(args[0] ?? { k: "sym", v: "nil" }, env);
         return tBool;
       case "fn":
         return this.typeFn(args, env, form);
@@ -793,7 +821,7 @@ class Checker {
         return tDyn(tAny);
       }
       case "after": {
-        this.expect(this.typeForm(args[0] ?? { k: "nil" }, env), tNum, args[0], "after");
+        this.expect(this.typeForm(args[0] ?? { k: "sym", v: "nil" }, env), tNum, args[0], "after");
         this.forms(args.slice(1), env);
         return tNil;
       }
@@ -849,6 +877,7 @@ class Checker {
       "num?": tNum,
       "bool?": tBool,
       "nil?": tNil,
+      "symbol?": tSym,
       "list?": tOr([tEmptyList, tList(tAny), { k: "tuple", items: [tAny] }]),
       "map?": tOr([tEmptyMap, tMap(new Map(), tAny)]),
     };
@@ -929,9 +958,8 @@ class Checker {
         return kindOf(v);
       }
       const { types } = this.typeSpread(v.v, env, v, true);
-      if (v.vec) return types.length ? tTuple(types) : tEmptyList;
       if (!types.length) return tEmptyList;
-      return tList(tOr(types));
+      return tTuple(types);
     }
     if (v.k === "map") {
       if (!v.v.size) return tEmptyMap;
@@ -939,12 +967,7 @@ class Checker {
       for (const [k, val] of v.v) keys.set(k, this.typeQuote(val, env, depth));
       return tMap(keys);
     }
-    if (v.k === "sym") {
-      if (v.v === "true") return tTrue;
-      if (v.v === "false") return tFalse;
-      if (v.v === "nil") return tNil;
-      return tUStr;
-    }
+    if (v.k === "sym") return tSymLit(v.v);
     return kindOf(v);
   }
 
@@ -1329,9 +1352,19 @@ class Checker {
         return tBool;
       case "str": {
         const parts = pos.map(unwrap);
-        if (parts.every((t) => t.k === "str" && t.v !== undefined)) {
-          return tLit(parts.map((t) => (t.k === "str" ? t.v! : "")).join(""));
+        const texts: string[] = [];
+        let allLit = true;
+        for (const t of parts) {
+          if (t.k === "str" && t.v !== undefined) texts.push(t.v);
+          else if (t.k === "sym" && t.v !== undefined) texts.push(t.v);
+          else if (t.k === "bool" && t.v !== undefined) texts.push(t.v ? "true" : "false");
+          else if (t.k === "nil") texts.push("nil");
+          else {
+            allLit = false;
+            break;
+          }
         }
+        if (allLit) return tLit(texts.join(""));
         return tUStr;
       }
       case "len":
@@ -1396,8 +1429,25 @@ class Checker {
       case "str?":
       case "bool?":
       case "nil?":
+      case "symbol?":
         this.typePred(name, pos[0], raw?.[0], env);
         return tBool;
+      case "symbol": {
+        if (!pos.length) {
+          this.err(form, "symbol needs a string");
+          return tUSym;
+        }
+        const a = unwrap(pos[0]!);
+        if (a.k === "sym") return a.v !== undefined ? tSymLit(a.v) : tSym;
+        if (a.k === "usym") return tUSym;
+        if (a.k === "str" && a.v !== undefined) return tSymLit(a.v);
+        if (a.k === "str" || a.k === "ustr") return tUSym;
+        if (a.k === "bool" && a.v === true) return tTrue;
+        if (a.k === "bool" && a.v === false) return tFalse;
+        if (a.k === "nil") return tNil;
+        this.expect(pos[0]!, tOr([tStr, tUStr, tSym, tUSym, tBool, tNil]), raw?.[0] ?? form, "symbol");
+        return tUSym;
+      }
       case "get": {
         if (pos.length < 2) {
           this.err(form, "get needs a map and a key");
@@ -1532,6 +1582,7 @@ class Checker {
         "num?": tNum,
         "bool?": tBool,
         "nil?": tNil,
+        "symbol?": tSym,
       };
       const want = pred[name];
       if (want) this.refine(env, at.v, tAny);
@@ -1900,7 +1951,7 @@ export function checkScript(src: string, world: TypeWorld): CheckResult {
       fnForms.push({
         name: f.name,
         nameForm: f.nameForm ?? { k: "sym", v: f.name },
-        form: f.nameForm ?? c.paramsForm ?? { k: "nil" },
+        form: f.nameForm ?? c.paramsForm ?? { k: "sym", v: "nil" },
         params: c.params,
         body: c.body,
         paramsForm: c.paramsForm ?? { k: "list", v: [] },
@@ -1922,11 +1973,11 @@ export function checkScript(src: string, world: TypeWorld): CheckResult {
   for (const form of parsed.forms) {
     if (form.k === "comment") continue;
     if (form.k === "list" && form.v[0]?.k === "sym" && form.v[0].v === "defm") {
-      if (form.v[1]?.k !== "sym" || form.v[2]?.k !== "list") continue;
       try {
-        const params = parseParams(form.v[2], "defm");
-        chk.typeClause(params, form.v.slice(3), env, form.v[2]);
-        if (form.v[1].span) chk.note(form.v[1], tDyn(tAny), form.v[1].v);
+        const d = asDefForm(form, "defm");
+        if (!d) continue;
+        chk.typeClause(d.params, d.body, env, d.paramsForm);
+        if (d.nameForm.span) chk.note(d.nameForm, tDyn(tAny), d.name);
       } catch (e) {
         chk.err(form, e instanceof Error ? e.message : "bad defm");
       }
